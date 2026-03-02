@@ -11,6 +11,7 @@ build/
 venv/
 .venv/
 env/
+.ruff_cache/
 
 # Save files (never commit personal data)
 *.sav
@@ -28,3 +29,6 @@ desktop.ini
 
 # Screenshots / local assets
 # screenshot.png intentionally tracked for README
+
+# Local execution plan (kept out of VCS)
+/I18N_EXECUTION_PLAN.md
