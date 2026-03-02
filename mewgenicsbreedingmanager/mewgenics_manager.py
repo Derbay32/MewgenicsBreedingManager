@@ -13,7 +13,7 @@ import sqlite3
 import struct
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, Sequence, cast
 
 import lz4.block
 from PySide6.QtCore import (
@@ -21,6 +21,7 @@ from PySide6.QtCore import (
     QFileSystemWatcher,
     QItemSelectionModel,
     QModelIndex,
+    QPersistentModelIndex,
     QSortFilterProxyModel,
     Qt,
 )
@@ -56,6 +57,14 @@ _JUNK_STRINGS = frozenset({"none", "null", "", "defaultmove", "default_move"})
 def _valid_str(s) -> bool:
     """Reject None, empty, and game filler strings like 'none' or 'defaultmove'."""
     return bool(s) and s.strip().lower() not in _JUNK_STRINGS
+
+
+def _clean_str_items(values: Sequence[Optional[str]]) -> list[str]:
+    cleaned: list[str] = []
+    for value in values:
+        if isinstance(value, str) and _valid_str(value):
+            cleaned.append(value)
+    return cleaned
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -290,7 +299,6 @@ _ABILITY_LOOKUP: dict[str, str] = {
     "splitshot": "Basic attack shoots multiple projectiles in a 5-tile cross (half damage each).",
     "survivalist": "4 healing consumables and a water bottle added. +2 food stored after each battle.",
     "taintedmother": "Familiars and Charmed units gain +4 Speed and inflict Poison and Bleed.",
-    "vampirism": "Your basic attack has Lifesteal.",
     # Cleric passives
     "angelic": "When you heal an ally, they also gain mana.",
     "blessed": "Gain +1 to 2 random stats at the start of each turn.",
@@ -517,12 +525,12 @@ def _find_mutation_table(raw: bytes) -> int:
     return -1
 
 
-def _read_visual_mutations(raw: bytes) -> list:
+def _read_visual_mutations(raw: bytes) -> list[str]:
     """Return list of active visual-mutation names (e.g. 'Eye Mutation')."""
     base = _find_mutation_table(raw)
     if base == -1:
         return []
-    result = []
+    result: list[str] = []
     for i in range(14):
         slot_id = struct.unpack_from("<I", raw, base + 16 + i * 20)[0]
         if slot_id >= 300:
@@ -611,6 +619,9 @@ class Cat:
         self.lovers: list["Cat"] = []
         self.haters: list["Cat"] = []
         self.children: list["Cat"] = []  # direct offspring; assigned by parse_save
+        self.abilities: list[str] = []
+        self.equipment: list[str] = []
+        self.mutations: list[str] = []
 
         # ── Ability run — anchored on "DefaultMove" ─────────────────────────
         # The ability block is a u64-length-prefixed ASCII identifier run.
@@ -649,7 +660,7 @@ class Cat:
                 run_items.append(item)
 
             # Active abilities: items[1-5] (skip DefaultMove at [0])
-            self.abilities = [x for x in run_items[1:6] if _valid_str(x)]
+            self.abilities = _clean_str_items(run_items[1:6])
 
             # Passive mutations: item[10] then 3 tail tier-entries
             passives: list[str] = []
@@ -674,7 +685,6 @@ class Cat:
                     pass
 
             self.mutations = passives
-            self.equipment = []  # equipment parsing requires separate byte-marker logic
 
         else:
             # Fallback: old heuristic scan for any uppercase-starting ASCII string
@@ -691,12 +701,12 @@ class Cat:
             if found != -1:
                 r.seek(found)
 
-            self.abilities = [a for a in [r.str() for _ in range(6)] if _valid_str(a)]
-            self.equipment = [s for s in [r.str() for _ in range(4)] if _valid_str(s)]
+            self.abilities = _clean_str_items([r.str() for _ in range(6)])
+            self.equipment = _clean_str_items([r.str() for _ in range(4)])
 
             self.mutations = []
             first = r.str()
-            if _valid_str(first):
+            if isinstance(first, str) and _valid_str(first):
                 self.mutations.append(first)
             for _ in range(13):
                 if r.remaining() < 12:
@@ -705,7 +715,7 @@ class Cat:
                 if flag == 0:
                     break
                 p = r.str()
-                if _valid_str(p):
+                if isinstance(p, str) and _valid_str(p):
                     self.mutations.append(p)
 
         # Visual mutations from the 296-byte fixed mutation table (prepend so they
@@ -756,7 +766,9 @@ class Cat:
 # ── Ancestry helpers ──────────────────────────────────────────────────────────
 
 
-def get_all_ancestors(cat: Optional[Cat], depth: int = 6, _seen: set = None) -> set:
+def get_all_ancestors(
+    cat: Optional[Cat], depth: int = 6, _seen: Optional[set[int]] = None
+) -> set[Cat]:
     """Return all ancestor Cat objects up to `depth` generations."""
     if cat is None or depth == 0:
         return set()
@@ -1036,7 +1048,7 @@ class CatTableModel(QAbstractTableModel):
             self.dataChanged.emit(
                 self.index(0, 0),
                 self.index(len(self._cats) - 1, len(COLUMNS) - 1),
-                [Qt.BackgroundRole, Qt.ForegroundRole],
+                [Qt.ItemDataRole.BackgroundRole, Qt.ItemDataRole.ForegroundRole],
             )
 
     def load(self, cats: list[Cat]):
@@ -1050,27 +1062,39 @@ class CatTableModel(QAbstractTableModel):
             self.dataChanged.emit(
                 self.index(0, 0),
                 self.index(len(self._cats) - 1, len(COLUMNS) - 1),
-                [Qt.BackgroundRole, Qt.ForegroundRole],
+                [Qt.ItemDataRole.BackgroundRole, Qt.ItemDataRole.ForegroundRole],
             )
 
-    def rowCount(self, parent=QModelIndex()):
+    def rowCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()):
         return len(self._cats)
 
-    def columnCount(self, parent=QModelIndex()):
+    def columnCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()):
         return len(COLUMNS)
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ):
+        if (
+            orientation == Qt.Orientation.Horizontal
+            and role == Qt.ItemDataRole.DisplayRole
+        ):
             return COLUMNS[section]
         return None
 
-    def data(self, index, role=Qt.DisplayRole):
+    def data(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ):
         if not index.isValid():
             return None
         cat = self._cats[index.row()]
         col = index.column()
 
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             if col == COL_NAME:
                 return cat.name
             if col == COL_GEN:
@@ -1104,16 +1128,16 @@ class CatTableModel(QAbstractTableModel):
                 score = len(find_common_ancestors(cat.parent_a, cat.parent_b))
                 return str(score) if score else "—"
 
-        elif role == Qt.UserRole:
+        elif role == Qt.ItemDataRole.UserRole:
             if col in STAT_COLS:
                 return cat.base_stats[STAT_NAMES[col - 4]]
             if col == COL_SUM:
                 return sum(cat.base_stats.values())
             if col == COL_AGE:
                 return cat.generation
-            return self.data(index, Qt.DisplayRole)
+            return self.data(index, Qt.ItemDataRole.DisplayRole)
 
-        elif role == Qt.BackgroundRole:
+        elif role == Qt.ItemDataRole.BackgroundRole:
             compat = (
                 _compatibility(self._focus_cat, cat)
                 if self._focus_cat is not None and cat is not self._focus_cat
@@ -1162,7 +1186,7 @@ class CatTableModel(QAbstractTableModel):
             if compat == "risky":
                 return QBrush(QColor(22, 18, 10))
 
-        elif role == Qt.ForegroundRole:
+        elif role == Qt.ItemDataRole.ForegroundRole:
             compat = (
                 _compatibility(self._focus_cat, cat)
                 if self._focus_cat is not None and cat is not self._focus_cat
@@ -1178,7 +1202,7 @@ class CatTableModel(QAbstractTableModel):
             if col in STAT_COLS or col == COL_STAT:
                 return QBrush(QColor(255, 255, 255))
 
-        elif role == Qt.ToolTipRole:
+        elif role == Qt.ItemDataRole.ToolTipRole:
             if col in STAT_COLS:
                 n = STAT_NAMES[col - 4]
                 b = cat.base_stats[n]
@@ -1192,9 +1216,9 @@ class CatTableModel(QAbstractTableModel):
             if col == COL_ABIL and cat.abilities:
                 return "\n".join(cat.abilities)
 
-        elif role == Qt.TextAlignmentRole:
+        elif role == Qt.ItemDataRole.TextAlignmentRole:
             if col in STAT_COLS or col in (COL_GEN, COL_STAT, COL_SUM, COL_AGE):
-                return Qt.AlignCenter
+                return Qt.AlignmentFlag.AlignCenter
 
         return None
 
@@ -1207,7 +1231,7 @@ class RoomFilterModel(QSortFilterProxyModel):
         super().__init__()
         self._room = None
         self._name_filter = ""
-        self.setSortRole(Qt.UserRole)
+        self.setSortRole(Qt.ItemDataRole.UserRole)
 
     def set_room(self, key):
         self._room = key
@@ -1218,7 +1242,8 @@ class RoomFilterModel(QSortFilterProxyModel):
         self.invalidate()
 
     def filterAcceptsRow(self, source_row, source_parent):
-        cat = self.sourceModel().cat_at(source_row)
+        source_model = cast(CatTableModel, self.sourceModel())
+        cat = source_model.cat_at(source_row)
         if cat is None:
             return False
         if self._name_filter and self._name_filter not in cat.name.lower():
@@ -1263,15 +1288,23 @@ def _sec(text: str) -> QLabel:
     return lbl
 
 
+def _styled_label(text: str, style: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet(style)
+    return lbl
+
+
 def _vsep() -> QFrame:
     f = QFrame()
-    f.setFrameShape(QFrame.VLine)
+    f.setFrameShape(QFrame.Shape.VLine)
     f.setStyleSheet("color:#1e1e38;")
     return f
 
 
 class ChipRow(QWidget):
-    def __init__(self, items: list[str], tooltip_fn=None):
+    def __init__(
+        self, items: Sequence[str], tooltip_fn: Optional[Callable[[str], str]] = None
+    ):
         super().__init__()
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -1307,7 +1340,10 @@ class CatDetailPanel(QWidget):
     def show_cats(self, cats: list[Cat]):
         old = self._content
         self._content = QWidget()
-        self.layout().replaceWidget(old, self._content)
+        layout = self.layout()
+        if layout is None:
+            return
+        layout.replaceWidget(old, self._content)
         old.deleteLater()
 
         if not cats:
@@ -1342,7 +1378,7 @@ class CatDetailPanel(QWidget):
         name_row.addWidget(gl)
         name_row.addStretch()
         id_col.addLayout(name_row)
-        id_col.addWidget(QLabel(cat.room_display or "—", styleSheet=_META_STYLE))
+        id_col.addWidget(_styled_label(cat.room_display or "—", _META_STYLE))
 
         # Stats: show all 7; highlight any that are modified
         has_mods = any(cat.total_stats[n] != cat.base_stats[n] for n in STAT_NAMES)
@@ -1369,6 +1405,8 @@ class CatDetailPanel(QWidget):
 
         def _navigate(target: Cat):
             mw = self.window()
+            if not isinstance(mw, MainWindow):
+                return
             # Use "All Cats" view so gone/adventure cats are always reachable
             mw._filter("__all__", mw._btn_everyone)
             for row in range(mw._source_model.rowCount()):
@@ -1377,7 +1415,10 @@ class CatDetailPanel(QWidget):
                         mw._source_model.index(row, 0)
                     )
                     if proxy_idx.isValid():
-                        mw._table.selectionModel().setCurrentIndex(
+                        selection_model = mw._table.selectionModel()
+                        if selection_model is None:
+                            return
+                        selection_model.setCurrentIndex(
                             proxy_idx,
                             QItemSelectionModel.SelectionFlag.ClearAndSelect
                             | QItemSelectionModel.SelectionFlag.Rows,
@@ -1463,14 +1504,19 @@ class CatDetailPanel(QWidget):
             if cat.haters:
                 rel.addWidget(_sec("HATERS"))
                 hl = ChipRow([c.name for c in cat.haters])
-                for i in range(hl.layout().count() - 1):  # tint hater chips red
-                    w = hl.layout().itemAt(i).widget()
-                    if w:
-                        w.setStyleSheet(
-                            w.styleSheet().replace(
-                                "background:#252545", "background:#452020"
+                hl_layout = hl.layout()
+                if hl_layout is not None:
+                    for i in range(hl_layout.count() - 1):  # tint hater chips red
+                        item = hl_layout.itemAt(i)
+                        if item is None:
+                            continue
+                        w = item.widget()
+                        if w:
+                            w.setStyleSheet(
+                                w.styleSheet().replace(
+                                    "background:#252545", "background:#452020"
+                                )
                             )
-                        )
                 rel.addWidget(hl)
             rel.addStretch()
             root.addLayout(rel)
@@ -1493,7 +1539,7 @@ class CatDetailPanel(QWidget):
         for cat in (a, b):
             nl = QLabel(cat.name)
             nl.setStyleSheet(_NAME_STYLE)
-            nl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            nl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             hdr.addWidget(nl)
             gl = QLabel(cat.gender_display)
             gl.setStyleSheet("color:#7ac; font-size:12px; font-weight:bold;")
@@ -1508,7 +1554,7 @@ class CatDetailPanel(QWidget):
 
         hdr.addStretch()
         if not ok:
-            hdr.addWidget(QLabel(f"⚠  {reason}", styleSheet=_WARN_STYLE))
+            hdr.addWidget(_styled_label(f"⚠  {reason}", _WARN_STYLE))
 
         root.addLayout(hdr)
 
@@ -1540,12 +1586,12 @@ class CatDetailPanel(QWidget):
         for j, stat in enumerate(STAT_NAMES):
             h = QLabel(stat)
             h.setStyleSheet("color:#555; font-size:9px; font-weight:bold;")
-            h.setAlignment(Qt.AlignCenter)
+            h.setAlignment(Qt.AlignmentFlag.AlignCenter)
             grid.addWidget(h, 0, j + 1)
         sum_col = len(STAT_NAMES) + 1
         sh = QLabel("Sum")
         sh.setStyleSheet("color:#455; font-size:9px; font-weight:bold;")
-        sh.setAlignment(Qt.AlignCenter)
+        sh.setAlignment(Qt.AlignmentFlag.AlignCenter)
         grid.addWidget(sh, 0, sum_col)
 
         for i, (cat, is_cat) in enumerate(grid_rows):
@@ -1562,7 +1608,7 @@ class CatDetailPanel(QWidget):
                 name_lbl.setStyleSheet("color:#ddd; font-size:11px; font-weight:bold;")
                 gen_lbl = QLabel(cat.gender_display)
                 gen_lbl.setFixedWidth(20)
-                gen_lbl.setAlignment(Qt.AlignCenter)
+                gen_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 gen_lbl.setStyleSheet(
                     "color:#fff; background:#253555; border-radius:4px;"
                     " font-size:10px; font-weight:bold;"
@@ -1583,7 +1629,7 @@ class CatDetailPanel(QWidget):
                     val = cat.base_stats[stat]
                     c = STAT_COLORS.get(val, QColor(100, 100, 115))
                     cell = QLabel(str(val))
-                    cell.setAlignment(Qt.AlignCenter)
+                    cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     cell.setStyleSheet(
                         f"background:rgb({c.red()},{c.green()},{c.blue()});"
                         f"color:#fff; font-size:11px; font-weight:bold;"
@@ -1595,7 +1641,7 @@ class CatDetailPanel(QWidget):
                     c = STAT_COLORS.get(hi, QColor(100, 100, 115))
                     text = f"{lo}–{hi}" if lo != hi else str(lo)
                     cell = QLabel(text)
-                    cell.setAlignment(Qt.AlignCenter)
+                    cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     cell.setStyleSheet(
                         f"color:rgb({c.red()},{c.green()},{c.blue()});"
                         f"font-size:11px; font-weight:bold;"
@@ -1612,7 +1658,7 @@ class CatDetailPanel(QWidget):
                 hi_s = sum(max(a.base_stats[st], b.base_stats[st]) for st in STAT_NAMES)
                 sc = QLabel(f"{lo_s}–{hi_s}" if lo_s != hi_s else str(lo_s))
                 sc.setStyleSheet("color:#777; font-size:11px; font-weight:bold;")
-            sc.setAlignment(Qt.AlignCenter)
+            sc.setAlignment(Qt.AlignmentFlag.AlignCenter)
             grid.addWidget(sc, row_num, sum_col)
 
         mid.addWidget(grid_w)
@@ -1627,7 +1673,7 @@ class CatDetailPanel(QWidget):
                 row = QHBoxLayout()
                 row.setSpacing(5)
                 row.addWidget(
-                    QLabel(f"{cat.name}:", styleSheet="color:#555; font-size:10px;")
+                    _styled_label(f"{cat.name}:", "color:#555; font-size:10px;")
                 )
                 for ab in cat.abilities:
                     row.addWidget(_chip(ab, _ability_tip(ab)))
@@ -1651,7 +1697,7 @@ class CatDetailPanel(QWidget):
                     mrow = QHBoxLayout()
                     mrow.setSpacing(5)
                     mrow.addWidget(
-                        QLabel(f"{cat.name}:", styleSheet="color:#555; font-size:10px;")
+                        _styled_label(f"{cat.name}:", "color:#555; font-size:10px;")
                     )
                     for mut in cat.mutations:
                         mrow.addWidget(_chip(mut, _ability_tip(mut)))
@@ -1671,24 +1717,22 @@ class CatDetailPanel(QWidget):
 
             if is_haters:
                 lc.addWidget(
-                    QLabel("⚠  These cats hate each other", styleSheet=_WARN_STYLE)
+                    _styled_label("⚠  These cats hate each other", _WARN_STYLE)
                 )
             if is_direct:
-                lc.addWidget(
-                    QLabel("⚠  Direct parent/offspring", styleSheet=_WARN_STYLE)
-                )
+                lc.addWidget(_styled_label("⚠  Direct parent/offspring", _WARN_STYLE))
             elif common:
                 lc.addWidget(
-                    QLabel(
+                    _styled_label(
                         f"⚠  {len(common)} shared ancestor{'s' if len(common) > 1 else ''}: "
                         + "  ·  ".join(c.short_name for c in common[:6]),
-                        styleSheet=_WARN_STYLE,
+                        _WARN_STYLE,
                     )
                 )
             elif get_parents(a) or get_parents(b):
-                lc.addWidget(QLabel("✓  No shared ancestors", styleSheet=_SAFE_STYLE))
+                lc.addWidget(_styled_label("✓  No shared ancestors", _SAFE_STYLE))
             else:
-                lc.addWidget(QLabel("—  Lineage unknown", styleSheet=_META_STYLE))
+                lc.addWidget(_styled_label("—  Lineage unknown", _META_STYLE))
 
             lc.addStretch()
             bot.addLayout(lc)
@@ -1747,10 +1791,11 @@ class LineageDialog(QDialog):
                     f" text-align:center; }}"
                     f"QPushButton:hover {{ background:{hover}; }}"
                 )
-                if can_nav:
+                if can_nav and navigate_fn is not None:
+                    nav_fn = navigate_fn
                     btn.setCursor(Qt.CursorShape.PointingHandCursor)
                     btn.clicked.connect(
-                        lambda checked=False, c=cat_obj: (self.accept(), navigate_fn(c))
+                        lambda checked=False, c=cat_obj: (self.accept(), nav_fn(c))
                     )
             btn.setMinimumWidth(100)
             btn.setMaximumWidth(200)
@@ -1763,7 +1808,9 @@ class LineageDialog(QDialog):
                 "color:#333; font-size:9px; font-weight:bold; letter-spacing:1px;"
                 " min-width:90px;"
             )
-            lbl.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
+            lbl.setAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
+            )
             return lbl
 
         def make_gen_row(label_text, cat_list, highlight_all=False, dim_all=False):
@@ -1799,9 +1846,9 @@ class LineageDialog(QDialog):
             make_gen_row("CHILDREN", children[:8])
             if len(children) > 8:
                 outer.addWidget(
-                    QLabel(
+                    _styled_label(
                         f"  … and {len(children) - 8} more children",
-                        styleSheet="color:#444; font-size:10px; padding-left:100px;",
+                        "color:#444; font-size:10px; padding-left:100px;",
                     )
                 )
         if grandchildren:
@@ -1809,16 +1856,16 @@ class LineageDialog(QDialog):
             make_gen_row("GRANDCHILDREN", unique_gc[:8])
             if len(unique_gc) > 8:
                 outer.addWidget(
-                    QLabel(
+                    _styled_label(
                         f"  … and {len(unique_gc) - 8} more grandchildren",
-                        styleSheet="color:#444; font-size:10px; padding-left:100px;",
+                        "color:#444; font-size:10px; padding-left:100px;",
                     )
                 )
 
         outer.addStretch()
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
-        outer.addWidget(close_btn, alignment=Qt.AlignRight)
+        outer.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
 
 # ── Sidebar helpers ───────────────────────────────────────────────────────────
@@ -1902,7 +1949,7 @@ class MainWindow(QMainWindow):
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(0)
 
-        hs = QSplitter(Qt.Horizontal)
+        hs = QSplitter(Qt.Orientation.Horizontal)
         rl.addWidget(hs)
         hs.addWidget(self._build_sidebar())
         hs.addWidget(self._build_content())
@@ -1921,12 +1968,12 @@ class MainWindow(QMainWindow):
         vb.setSpacing(2)
 
         def sl(text):
-            l = QLabel(text)
-            l.setStyleSheet(
+            lbl = QLabel(text)
+            lbl.setStyleSheet(
                 "color:#444; font-size:10px; font-weight:bold;"
                 " letter-spacing:1px; padding:8px 4px 4px 4px;"
             )
-            return l
+            return lbl
 
         vb.addWidget(sl("VIEW"))
         self._btn_everyone = _sidebar_btn("All Cats")
@@ -1983,8 +2030,11 @@ class MainWindow(QMainWindow):
     def _rebuild_room_buttons(self, cats: list[Cat]):
         while self._rooms_vb.count():
             item = self._rooms_vb.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
         _ROOM_ORDER = {
             "Attic": 0,
             "Attic_Large": 0,
@@ -2045,7 +2095,7 @@ class MainWindow(QMainWindow):
         vb.addWidget(hdr)
 
         # Vertical splitter: table on top, detail panel on bottom (user-resizable)
-        vs = QSplitter(Qt.Vertical)
+        vs = QSplitter(Qt.Orientation.Vertical)
         vs.setHandleWidth(4)
         vs.setStyleSheet("QSplitter::handle:vertical { background:#1e1e38; }")
         self._detail_splitter = vs
@@ -2062,8 +2112,8 @@ class MainWindow(QMainWindow):
         self._table = QTableView()
         self._table.setModel(self._proxy_model)
         self._table.setSortingEnabled(True)
-        self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self._table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
         self._table.setShowGrid(False)
@@ -2074,38 +2124,38 @@ class MainWindow(QMainWindow):
 
         # Name: interactive so the user can resize it; not Stretch so it
         # doesn't eat the blank space that should sit at the right edge.
-        hh.setSectionResizeMode(COL_NAME, QHeaderView.Interactive)
+        hh.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Interactive)
         self._table.setColumnWidth(COL_NAME, 130)
 
         # Room: size to content so it adapts to room name length
-        hh.setSectionResizeMode(COL_ROOM, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(COL_ROOM, QHeaderView.ResizeMode.ResizeToContents)
 
         # Narrow fixed columns (gender, status, stats, sum)
         for col, width in [(COL_GEN, _W_GEN), (COL_STAT, _W_STATUS), (COL_SUM, 38)] + [
             (c, _W_STAT) for c in STAT_COLS
         ]:
-            hh.setSectionResizeMode(col, QHeaderView.Fixed)
+            hh.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
             self._table.setColumnWidth(col, width)
 
         # Abilities: interactive — user drags to taste
-        hh.setSectionResizeMode(COL_ABIL, QHeaderView.Interactive)
+        hh.setSectionResizeMode(COL_ABIL, QHeaderView.ResizeMode.Interactive)
         self._table.setColumnWidth(COL_ABIL, 180)
 
         # Mutations: interactive
-        hh.setSectionResizeMode(COL_MUTS, QHeaderView.Interactive)
+        hh.setSectionResizeMode(COL_MUTS, QHeaderView.ResizeMode.Interactive)
         self._table.setColumnWidth(COL_MUTS, 155)
 
         # Generation depth: fixed narrow, hidden by default (behind lineage toggle)
-        hh.setSectionResizeMode(COL_AGE, QHeaderView.Fixed)
+        hh.setSectionResizeMode(COL_AGE, QHeaderView.ResizeMode.Fixed)
         self._table.setColumnWidth(COL_AGE, 34)
         self._table.setColumnHidden(COL_AGE, True)
 
         # Source: Stretch — absorbs blank space, hidden by default (behind lineage toggle)
-        hh.setSectionResizeMode(COL_SRC, QHeaderView.Stretch)
+        hh.setSectionResizeMode(COL_SRC, QHeaderView.ResizeMode.Stretch)
         self._table.setColumnHidden(COL_SRC, True)
 
         # Inbreeding score: fixed narrow, hidden by default
-        hh.setSectionResizeMode(COL_INB, QHeaderView.Fixed)
+        hh.setSectionResizeMode(COL_INB, QHeaderView.ResizeMode.Fixed)
         self._table.setColumnWidth(COL_INB, 38)
         self._table.setColumnHidden(COL_INB, True)
 
@@ -2165,7 +2215,7 @@ class MainWindow(QMainWindow):
 
     # ── Filtering ──────────────────────────────────────────────────────────
 
-    def _filter(self, room_key, btn: QPushButton):
+    def _filter(self, room_key: Optional[str], btn: QPushButton):
         if self._active_btn and self._active_btn is not btn:
             self._active_btn.setChecked(False)
         btn.setChecked(True)
@@ -2176,7 +2226,7 @@ class MainWindow(QMainWindow):
         self._detail.show_cats([])
         self._source_model.set_focus_cat(None)
 
-    def _update_header(self, room_key):
+    def _update_header(self, room_key: Optional[str]):
         if room_key == "__all__":
             self._header_lbl.setText("All Cats")
         elif room_key is None:
@@ -2186,7 +2236,10 @@ class MainWindow(QMainWindow):
         elif room_key == "__adventure__":
             self._header_lbl.setText("On Adventure")
         else:
-            self._header_lbl.setText(ROOM_DISPLAY.get(room_key, room_key))
+            if room_key is None:
+                self._header_lbl.setText("")
+            else:
+                self._header_lbl.setText(ROOM_DISPLAY.get(room_key, room_key))
 
     def _update_count(self):
         visible = self._proxy_model.rowCount()
@@ -2264,7 +2317,7 @@ class MainWindow(QMainWindow):
 
 def _hsep() -> QFrame:
     f = QFrame()
-    f.setFrameShape(QFrame.HLine)
+    f.setFrameShape(QFrame.Shape.HLine)
     f.setStyleSheet("color:#1e1e38; margin:6px 0;")
     return f
 
@@ -2277,17 +2330,17 @@ def main():
     app.setStyle("Fusion")
 
     pal = QPalette()
-    pal.setColor(QPalette.Window, QColor(13, 13, 28))
-    pal.setColor(QPalette.WindowText, QColor(220, 220, 230))
-    pal.setColor(QPalette.Base, QColor(18, 18, 36))
-    pal.setColor(QPalette.AlternateBase, QColor(20, 20, 40))
-    pal.setColor(QPalette.Text, QColor(220, 220, 230))
-    pal.setColor(QPalette.Button, QColor(22, 22, 46))
-    pal.setColor(QPalette.ButtonText, QColor(200, 200, 210))
-    pal.setColor(QPalette.Highlight, QColor(30, 48, 100))
-    pal.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
-    pal.setColor(QPalette.ToolTipBase, QColor(20, 20, 40))
-    pal.setColor(QPalette.ToolTipText, QColor(220, 220, 230))
+    pal.setColor(QPalette.ColorRole.Window, QColor(13, 13, 28))
+    pal.setColor(QPalette.ColorRole.WindowText, QColor(220, 220, 230))
+    pal.setColor(QPalette.ColorRole.Base, QColor(18, 18, 36))
+    pal.setColor(QPalette.ColorRole.AlternateBase, QColor(20, 20, 40))
+    pal.setColor(QPalette.ColorRole.Text, QColor(220, 220, 230))
+    pal.setColor(QPalette.ColorRole.Button, QColor(22, 22, 46))
+    pal.setColor(QPalette.ColorRole.ButtonText, QColor(200, 200, 210))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor(30, 48, 100))
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+    pal.setColor(QPalette.ColorRole.ToolTipBase, QColor(20, 20, 40))
+    pal.setColor(QPalette.ColorRole.ToolTipText, QColor(220, 220, 230))
     app.setPalette(pal)
 
     win = MainWindow()
