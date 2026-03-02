@@ -1074,6 +1074,7 @@ COL_INB = 16
 _W_STATUS = 62
 _W_STAT = 34
 _W_GEN = 28
+_FIXED_FILTER_KEYS = {"__all__", None, "__adventure__", "__gone__"}
 
 
 class CatTableModel(QAbstractTableModel):
@@ -1973,7 +1974,7 @@ class MainWindow(QMainWindow):
 
         self._watcher = QFileSystemWatcher(self)
         self._watcher.fileChanged.connect(self._on_file_changed)
-        self._apply_shell_texts()
+        self._retranslate_ui()
 
         saves = find_save_files()
         if saves:
@@ -2052,10 +2053,22 @@ class MainWindow(QMainWindow):
             return
         self._ui_language = set_language(language)
         self._settings.setValue("ui/language", self._ui_language)
-        self._apply_shell_texts()
+        self._retranslate_ui()
         self._sync_language_actions()
 
-    def _apply_shell_texts(self):
+    def _restore_active_filter_button(self):
+        key = self._current_room_key
+        if key not in self._room_btns:
+            key = None
+            self._current_room_key = None
+        btn = self._room_btns.get(key, self._btn_all)
+        if self._active_btn and self._active_btn is not btn:
+            self._active_btn.setChecked(False)
+        btn.setChecked(True)
+        self._active_btn = btn
+        self._proxy_model.set_room(self._current_room_key)
+
+    def _retranslate_ui(self):
         self.setWindowTitle(
             t("app.title_with_save", name=os.path.basename(self._current_save))
             if self._current_save
@@ -2079,12 +2092,16 @@ class MainWindow(QMainWindow):
         else:
             self._save_lbl.setText(t("sidebar.save.none"))
 
+        if self._cats:
+            self._rebuild_room_buttons(self._cats)
         self._update_sidebar_fixed_counts()
+        self._restore_active_filter_button()
         self._update_header(self._current_room_key)
         self._update_count()
         self._source_model.headerDataChanged.emit(
             Qt.Orientation.Horizontal, 0, COLUMN_COUNT - 1
         )
+        self._on_selection()
 
     # ── Layout ────────────────────────────────────────────────────────────
 
@@ -2177,6 +2194,9 @@ class MainWindow(QMainWindow):
         return w
 
     def _rebuild_room_buttons(self, cats: list[Cat]):
+        for key in list(self._room_btns.keys()):
+            if key not in _FIXED_FILTER_KEYS:
+                self._room_btns.pop(key, None)
         while self._rooms_vb.count():
             item = self._rooms_vb.takeAt(0)
             if item is None:
