@@ -104,17 +104,51 @@ ROOM_DISPLAY = {
     "Basement_Large": "Basement",
 }
 
-# Full status → abbreviated display in table cell
-STATUS_ABBREV = {
-    "In House": "House",
-    "Adventure": "Away",
-    "Gone": "Gone",
+STATUS_ABBREV_KEYS = {
+    "In House": "status.abbrev.house",
+    "Adventure": "status.abbrev.away",
+    "Gone": "status.abbrev.gone",
 }
 STATUS_COLOR = {
     "In House": QColor(50, 170, 110),
     "Adventure": QColor(70, 120, 200),
     "Gone": QColor(80, 80, 90),
 }
+
+COLUMN_LABEL_KEYS = [
+    "table.col.name",
+    "table.col.gender",
+    "table.col.room",
+    "table.col.status",
+]
+COLUMN_SUFFIX_KEYS = [
+    "table.col.sum",
+    "table.col.abilities",
+    "table.col.mutations",
+    "table.col.generation",
+    "table.col.source",
+    "table.col.inbreeding",
+]
+COLUMN_COUNT = len(COLUMN_LABEL_KEYS) + len(STAT_NAMES) + len(COLUMN_SUFFIX_KEYS)
+
+
+def _room_display_name(room_key: str) -> str:
+    locale_key = f"room.{room_key}"
+    translated = t(locale_key)
+    if translated != locale_key:
+        return translated
+    return ROOM_DISPLAY.get(room_key, room_key)
+
+
+def _status_abbrev(status: str) -> str:
+    key = STATUS_ABBREV_KEYS.get(status)
+    return t(key) if key else status
+
+
+def _column_labels() -> list[str]:
+    return [t(key) for key in COLUMN_LABEL_KEYS] + STAT_NAMES + [
+        t(key) for key in COLUMN_SUFFIX_KEYS
+    ]
 
 
 # ── Ability / mutation tooltip lookup ────────────────────────────────────────
@@ -748,7 +782,7 @@ class Cat:
     def room_display(self) -> str:
         if not self.room or self.room == "Adventure":
             return self.room or ""
-        return ROOM_DISPLAY.get(self.room, self.room)
+        return _room_display_name(self.room)
 
     @property
     def gender_display(self) -> str:
@@ -1018,11 +1052,6 @@ def find_save_files() -> list[str]:
 
 # ── Qt table model ────────────────────────────────────────────────────────────
 
-COLUMNS = (
-    ["Name", "♀/♂", "Room", "Status"]
-    + STAT_NAMES
-    + ["Sum", "Abilities", "Mutations", "Gen", "Source", "Inbr"]
-)
 COL_NAME = 0
 COL_GEN = 1
 COL_ROOM = 2
@@ -1053,7 +1082,7 @@ class CatTableModel(QAbstractTableModel):
         if self._cats:
             self.dataChanged.emit(
                 self.index(0, 0),
-                self.index(len(self._cats) - 1, len(COLUMNS) - 1),
+                self.index(len(self._cats) - 1, COLUMN_COUNT - 1),
                 [Qt.ItemDataRole.BackgroundRole, Qt.ItemDataRole.ForegroundRole],
             )
 
@@ -1067,7 +1096,7 @@ class CatTableModel(QAbstractTableModel):
         if self._cats:
             self.dataChanged.emit(
                 self.index(0, 0),
-                self.index(len(self._cats) - 1, len(COLUMNS) - 1),
+                self.index(len(self._cats) - 1, COLUMN_COUNT - 1),
                 [Qt.ItemDataRole.BackgroundRole, Qt.ItemDataRole.ForegroundRole],
             )
 
@@ -1075,7 +1104,7 @@ class CatTableModel(QAbstractTableModel):
         return len(self._cats)
 
     def columnCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()):
-        return len(COLUMNS)
+        return COLUMN_COUNT
 
     def headerData(
         self,
@@ -1087,7 +1116,7 @@ class CatTableModel(QAbstractTableModel):
             orientation == Qt.Orientation.Horizontal
             and role == Qt.ItemDataRole.DisplayRole
         ):
-            return COLUMNS[section]
+            return _column_labels()[section]
         return None
 
     def data(
@@ -1108,7 +1137,7 @@ class CatTableModel(QAbstractTableModel):
             if col == COL_ROOM:
                 return cat.room_display
             if col == COL_STAT:
-                return STATUS_ABBREV.get(cat.status, cat.status)
+                return _status_abbrev(cat.status)
             if col in STAT_COLS:
                 return str(cat.base_stats[STAT_NAMES[col - 4]])
             if col == COL_SUM:
@@ -1122,10 +1151,14 @@ class CatTableModel(QAbstractTableModel):
             if col == COL_SRC:
                 pa, pb = cat.parent_a, cat.parent_b
                 if pa is None and pb is None:
-                    return "Stray"
+                    return t("source.stray")
 
                 def _pname(p):
-                    return p.name if p.status != "Gone" else f"{p.name} (gone)"
+                    return (
+                        p.name
+                        if p.status != "Gone"
+                        else t("source.gone_suffix", name=p.name)
+                    )
 
                 return " × ".join(_pname(p) for p in (pa, pb) if p is not None)
             if col == COL_INB:
@@ -1212,9 +1245,9 @@ class CatTableModel(QAbstractTableModel):
             if col in STAT_COLS:
                 n = STAT_NAMES[col - 4]
                 b = cat.base_stats[n]
-                t = cat.total_stats[n]
-                extra = f"  (+{t - b})" if t != b else ""
-                return f"{n}  base: {b}{extra}  |  total: {t}"
+                total_stat = cat.total_stats[n]
+                extra = f"  (+{total_stat - b})" if total_stat != b else ""
+                return f"{n}  base: {b}{extra}  |  total: {total_stat}"
             if col == COL_ROOM:
                 return cat.room
             if col == COL_MUTS and cat.mutations:
@@ -2029,6 +2062,10 @@ class MainWindow(QMainWindow):
 
         self._update_sidebar_fixed_counts()
         self._update_header(self._current_room_key)
+        self._update_count()
+        self._source_model.headerDataChanged.emit(
+            Qt.Orientation.Horizontal, 0, COLUMN_COUNT - 1
+        )
 
     # ── Layout ────────────────────────────────────────────────────────────
 
@@ -2144,7 +2181,7 @@ class MainWindow(QMainWindow):
         )
         for room in rooms:
             count = sum(1 for c in cats if c.room == room)
-            display = ROOM_DISPLAY.get(room, room)
+            display = _room_display_name(room)
             btn = _sidebar_btn(f"{display}  ({count})")
             btn.clicked.connect(lambda _, r=room, b=btn: self._filter(r, b))
             self._rooms_vb.addWidget(btn)
@@ -2330,10 +2367,7 @@ class MainWindow(QMainWindow):
         elif room_key == "__adventure__":
             self._header_lbl.setText(t("header.on_adventure"))
         else:
-            if room_key is None:
-                self._header_lbl.setText("")
-            else:
-                self._header_lbl.setText(ROOM_DISPLAY.get(room_key, room_key))
+            self._header_lbl.setText(_room_display_name(room_key) if room_key else "")
 
     def _update_sidebar_fixed_counts(self):
         if self._cats:
@@ -2357,12 +2391,14 @@ class MainWindow(QMainWindow):
     def _update_count(self):
         visible = self._proxy_model.rowCount()
         total = self._source_model.rowCount()
-        self._count_lbl.setText(f"  {visible} / {total} cats")
+        self._count_lbl.setText(t("header.count", visible=visible, total=total))
 
         placed = sum(1 for c in self._cats if c.status == "In House")
         adv = sum(1 for c in self._cats if c.status == "Adventure")
         gone = sum(1 for c in self._cats if c.status == "Gone")
-        self._summary_lbl.setText(f"House: {placed}  |  Away: {adv}  |  Gone: {gone}")
+        self._summary_lbl.setText(
+            t("header.summary", house=placed, away=adv, gone=gone)
+        )
 
     # ── Loading ────────────────────────────────────────────────────────────
 
