@@ -12,6 +12,7 @@ venv/
 .venv/
 env/
 .ruff_cache/
+poetry.lock
 
 # Save files (never commit personal data)
 *.sav
