@@ -1,8 +1,10 @@
 [project]
 name = "mewgenicsbreedingmanager"
-version = "0.1.0"
+version = "0.2.0"
 description = ""
-authors = [{ name = "Your Name", email = "you@example.com" }]
+authors = [
+    { name = "derbay32", email = "94528289+Derbay32@users.noreply.github.com" },
+]
 readme = "README.md"
 requires-python = ">=3.13,<3.15"
 dependencies = ["pyside6 (>=6.10.2,<7.0.0)", "lz4 (>=4.4.5,<5.0.0)"]
