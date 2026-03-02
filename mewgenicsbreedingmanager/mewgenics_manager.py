@@ -1899,7 +1899,7 @@ def _sidebar_btn(label: str) -> QPushButton:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mewgenics Breeding Manager")
+        self.setWindowTitle(t("app.title"))
         self.resize(1440, 900)
         self._settings = QSettings(
             "MewgenicsBreedingManager", "MewgenicsBreedingManager"
@@ -1913,6 +1913,7 @@ class MainWindow(QMainWindow):
         self._cats: list[Cat] = []
         self._room_btns: dict = {}
         self._active_btn = None
+        self._current_room_key: Optional[str] = None
         self._show_lineage: bool = False
 
         self._build_ui()
@@ -1920,6 +1921,7 @@ class MainWindow(QMainWindow):
 
         self._watcher = QFileSystemWatcher(self)
         self._watcher.fileChanged.connect(self._on_file_changed)
+        self._apply_shell_texts()
 
         saves = find_save_files()
         if saves:
@@ -1928,32 +1930,34 @@ class MainWindow(QMainWindow):
     # ── Menu ──────────────────────────────────────────────────────────────
 
     def _build_menu(self):
-        fm = self.menuBar().addMenu("File")
+        self._file_menu = self.menuBar().addMenu(t("menu.file"))
 
-        oa = QAction("Open Save File…", self)
-        oa.setShortcut("Ctrl+O")
-        oa.triggered.connect(self._open_file)
-        fm.addAction(oa)
+        self._open_action = QAction(t("menu.file.open_save"), self)
+        self._open_action.setShortcut("Ctrl+O")
+        self._open_action.triggered.connect(self._open_file)
+        self._file_menu.addAction(self._open_action)
 
-        ra = QAction("Reload", self)
-        ra.setShortcut("F5")
-        ra.triggered.connect(self._reload)
-        fm.addAction(ra)
+        self._reload_action = QAction(t("menu.file.reload"), self)
+        self._reload_action.setShortcut("F5")
+        self._reload_action.triggered.connect(self._reload)
+        self._file_menu.addAction(self._reload_action)
 
-        fm.addSeparator()
+        self._file_menu.addSeparator()
+        self._recent_save_actions: list[QAction] = []
         for path in find_save_files():
             a = QAction(os.path.basename(path), self)
             a.triggered.connect(lambda _, p=path: self.load_save(p))
-            fm.addAction(a)
+            self._file_menu.addAction(a)
+            self._recent_save_actions.append(a)
 
-        sm = self.menuBar().addMenu("Settings")
-        self._lineage_action = QAction("Show Family Tree && Inbreeding", self)
+        self._settings_menu = self.menuBar().addMenu(t("menu.settings"))
+        self._lineage_action = QAction(t("menu.settings.show_lineage"), self)
         self._lineage_action.setCheckable(True)
         self._lineage_action.setChecked(False)
         self._lineage_action.triggered.connect(self._toggle_lineage)
-        sm.addAction(self._lineage_action)
+        self._settings_menu.addAction(self._lineage_action)
 
-        self._language_menu = sm.addMenu("")
+        self._language_menu = self._settings_menu.addMenu("")
         self._language_group = QActionGroup(self)
         self._language_group.setExclusive(True)
 
@@ -1996,8 +2000,35 @@ class MainWindow(QMainWindow):
             return
         self._ui_language = set_language(language)
         self._settings.setValue("ui/language", self._ui_language)
-        self._apply_language_menu_texts()
+        self._apply_shell_texts()
         self._sync_language_actions()
+
+    def _apply_shell_texts(self):
+        self.setWindowTitle(
+            t("app.title_with_save", name=os.path.basename(self._current_save))
+            if self._current_save
+            else t("app.title")
+        )
+        self._file_menu.setTitle(t("menu.file"))
+        self._open_action.setText(t("menu.file.open_save"))
+        self._reload_action.setText(t("menu.file.reload"))
+        self._settings_menu.setTitle(t("menu.settings"))
+        self._lineage_action.setText(t("menu.settings.show_lineage"))
+        self._apply_language_menu_texts()
+
+        self._lbl_view.setText(t("sidebar.section.view"))
+        self._lbl_rooms.setText(t("sidebar.section.rooms"))
+        self._lbl_other.setText(t("sidebar.section.other"))
+        self._reload_btn.setText(t("sidebar.reload_button"))
+        self._search.setPlaceholderText(t("search.placeholder"))
+
+        if self._current_save:
+            self._save_lbl.setText(os.path.basename(self._current_save))
+        else:
+            self._save_lbl.setText(t("sidebar.save.none"))
+
+        self._update_sidebar_fixed_counts()
+        self._update_header(self._current_room_key)
 
     # ── Layout ────────────────────────────────────────────────────────────
 
@@ -2034,15 +2065,16 @@ class MainWindow(QMainWindow):
             )
             return lbl
 
-        vb.addWidget(sl("VIEW"))
-        self._btn_everyone = _sidebar_btn("All Cats")
+        self._lbl_view = sl(t("sidebar.section.view"))
+        vb.addWidget(self._lbl_view)
+        self._btn_everyone = _sidebar_btn(t("sidebar.filter.all_cats"))
         self._btn_everyone.clicked.connect(
             lambda: self._filter("__all__", self._btn_everyone)
         )
         vb.addWidget(self._btn_everyone)
         self._room_btns["__all__"] = self._btn_everyone
 
-        self._btn_all = _sidebar_btn("Alive")
+        self._btn_all = _sidebar_btn(t("sidebar.filter.alive"))
         self._btn_all.setChecked(True)
         self._active_btn = self._btn_all
         self._btn_all.clicked.connect(lambda: self._filter(None, self._btn_all))
@@ -2050,15 +2082,17 @@ class MainWindow(QMainWindow):
         self._room_btns[None] = self._btn_all
 
         vb.addWidget(_hsep())
-        vb.addWidget(sl("ROOMS"))
+        self._lbl_rooms = sl(t("sidebar.section.rooms"))
+        vb.addWidget(self._lbl_rooms)
         self._rooms_vb = QVBoxLayout()
         self._rooms_vb.setSpacing(2)
         vb.addLayout(self._rooms_vb)
         vb.addWidget(_hsep())
 
-        vb.addWidget(sl("OTHER"))
-        self._btn_adventure = _sidebar_btn("On Adventure")
-        self._btn_gone = _sidebar_btn("Gone")
+        self._lbl_other = sl(t("sidebar.section.other"))
+        vb.addWidget(self._lbl_other)
+        self._btn_adventure = _sidebar_btn(t("sidebar.filter.on_adventure"))
+        self._btn_gone = _sidebar_btn(t("sidebar.filter.gone"))
         self._btn_adventure.clicked.connect(
             lambda: self._filter("__adventure__", self._btn_adventure)
         )
@@ -2070,20 +2104,20 @@ class MainWindow(QMainWindow):
 
         vb.addStretch()
 
-        self._save_lbl = QLabel("No save loaded")
+        self._save_lbl = QLabel(t("sidebar.save.none"))
         self._save_lbl.setStyleSheet("color:#444; font-size:10px;")
         self._save_lbl.setWordWrap(True)
         vb.addWidget(self._save_lbl)
 
-        rb = QPushButton("⟳  Reload  (F5)")
-        rb.setStyleSheet(
+        self._reload_btn = QPushButton(t("sidebar.reload_button"))
+        self._reload_btn.setStyleSheet(
             "QPushButton { color:#888; background:#1a1a32;"
             " border:1px solid #2a2a4a; padding:7px;"
             " border-radius:4px; font-size:11px; }"
             "QPushButton:hover { background:#222244; }"
         )
-        rb.clicked.connect(self._reload)
-        vb.addWidget(rb)
+        self._reload_btn.clicked.connect(self._reload)
+        vb.addWidget(self._reload_btn)
         return w
 
     def _rebuild_room_buttons(self, cats: list[Cat]):
@@ -2130,14 +2164,14 @@ class MainWindow(QMainWindow):
         hdr.setFixedHeight(46)
         hb = QHBoxLayout(hdr)
         hb.setContentsMargins(14, 0, 14, 0)
-        self._header_lbl = QLabel("All Cats")
+        self._header_lbl = QLabel(t("header.all_cats"))
         self._header_lbl.setStyleSheet("color:#eee; font-size:15px; font-weight:bold;")
         self._count_lbl = QLabel("")
         self._count_lbl.setStyleSheet("color:#555; font-size:12px; padding-left:8px;")
         self._summary_lbl = QLabel("")
         self._summary_lbl.setStyleSheet("color:#4a7a9a; font-size:11px;")
         self._search = QLineEdit()
-        self._search.setPlaceholderText("Search…")
+        self._search.setPlaceholderText(t("search.placeholder"))
         self._search.setClearButtonEnabled(True)
         self._search.setFixedWidth(180)
         self._search.setStyleSheet(
@@ -2275,6 +2309,7 @@ class MainWindow(QMainWindow):
     # ── Filtering ──────────────────────────────────────────────────────────
 
     def _filter(self, room_key: Optional[str], btn: QPushButton):
+        self._current_room_key = room_key
         if self._active_btn and self._active_btn is not btn:
             self._active_btn.setChecked(False)
         btn.setChecked(True)
@@ -2287,18 +2322,37 @@ class MainWindow(QMainWindow):
 
     def _update_header(self, room_key: Optional[str]):
         if room_key == "__all__":
-            self._header_lbl.setText("All Cats")
+            self._header_lbl.setText(t("header.all_cats"))
         elif room_key is None:
-            self._header_lbl.setText("Alive")
+            self._header_lbl.setText(t("header.alive"))
         elif room_key == "__gone__":
-            self._header_lbl.setText("Gone")
+            self._header_lbl.setText(t("header.gone"))
         elif room_key == "__adventure__":
-            self._header_lbl.setText("On Adventure")
+            self._header_lbl.setText(t("header.on_adventure"))
         else:
             if room_key is None:
                 self._header_lbl.setText("")
             else:
                 self._header_lbl.setText(ROOM_DISPLAY.get(room_key, room_key))
+
+    def _update_sidebar_fixed_counts(self):
+        if self._cats:
+            total = len(self._cats)
+            alive = sum(1 for c in self._cats if c.status != "Gone")
+            adv = sum(1 for c in self._cats if c.status == "Adventure")
+            gone = sum(1 for c in self._cats if c.status == "Gone")
+            self._btn_everyone.setText(t("sidebar.filter.all_cats_count", count=total))
+            self._btn_all.setText(t("sidebar.filter.alive_count", count=alive))
+            self._btn_adventure.setText(
+                t("sidebar.filter.on_adventure_count", count=adv)
+            )
+            self._btn_gone.setText(t("sidebar.filter.gone_count", count=gone))
+            return
+
+        self._btn_everyone.setText(t("sidebar.filter.all_cats"))
+        self._btn_all.setText(t("sidebar.filter.alive"))
+        self._btn_adventure.setText(t("sidebar.filter.on_adventure"))
+        self._btn_gone.setText(t("sidebar.filter.gone"))
 
     def _update_count(self):
         visible = self._proxy_model.rowCount()
@@ -2323,27 +2377,24 @@ class MainWindow(QMainWindow):
             self._cats = cats
             self._source_model.load(cats)
             self._rebuild_room_buttons(cats)
-            # Update fixed sidebar button counts
-            total = len(cats)
-            alive = sum(1 for c in cats if c.status != "Gone")
-            adv = sum(1 for c in cats if c.status == "Adventure")
-            gone = sum(1 for c in cats if c.status == "Gone")
-            self._btn_everyone.setText(f"All Cats  ({total})")
-            self._btn_all.setText(f"Alive  ({alive})")
-            self._btn_adventure.setText(f"On Adventure  ({adv})")
-            self._btn_gone.setText(f"Gone  ({gone})")
+            self._update_sidebar_fixed_counts()
             self._filter(None, self._btn_all)
 
             name = os.path.basename(path)
             self._save_lbl.setText(name)
-            self.setWindowTitle(f"Mewgenics Breeding Manager — {name}")
+            self.setWindowTitle(t("app.title_with_save", name=name))
 
-            msg = f"Loaded {len(cats)} cats from {name}"
+            msg = t("status.loaded", count=len(cats), name=name)
             if errors:
-                msg += f"  ({len(errors)} parse errors)"
+                msg = t(
+                    "status.loaded_with_errors",
+                    count=len(cats),
+                    name=name,
+                    errors=len(errors),
+                )
             self.statusBar().showMessage(msg)
         except Exception as e:
-            self.statusBar().showMessage(f"Error loading save: {e}")
+            self.statusBar().showMessage(t("status.error_loading", error=e))
 
     def _toggle_lineage(self, checked: bool):
         self._show_lineage = checked
@@ -2357,7 +2408,10 @@ class MainWindow(QMainWindow):
         saves = find_save_files()
         start = os.path.dirname(saves[0]) if saves else os.path.expanduser("~")
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open Mewgenics Save File", start, "Save Files (*.sav);;All Files (*)"
+            self,
+            t("dialog.open_save.title"),
+            start,
+            t("dialog.open_save.filter"),
         )
         if path:
             self.load_save(path)
