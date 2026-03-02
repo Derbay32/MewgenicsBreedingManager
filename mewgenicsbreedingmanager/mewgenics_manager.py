@@ -1807,7 +1807,7 @@ class LineageDialog(QDialog):
 
     def __init__(self, cat: "Cat", parent=None, navigate_fn=None):
         super().__init__(parent)
-        self.setWindowTitle(f"Family Tree — {cat.name}")
+        self.setWindowTitle(t("dialog.family_tree.title", name=cat.name))
         self.setMinimumSize(700, 400)
         self.setStyleSheet(
             "QDialog { background:#0a0a18; }"
@@ -1824,7 +1824,7 @@ class LineageDialog(QDialog):
         # ── Reusable box builder ─────────────────────────────────────────
         def cat_box(cat_obj, highlight=False, dim=False):
             if cat_obj is None:
-                btn = QPushButton("Unknown")
+                btn = QPushButton(t("dialog.family_tree.unknown"))
                 btn.setEnabled(False)
                 btn.setStyleSheet(
                     "QPushButton { color:#252535; font-size:10px; padding:6px 10px;"
@@ -1894,31 +1894,34 @@ class LineageDialog(QDialog):
         for child in children:
             grandchildren.extend(child.children)
 
-        make_gen_row("GRANDPARENTS", grandparents)
-        make_gen_row("PARENTS", parents)
+        make_gen_row(t("dialog.family_tree.grandparents"), grandparents)
+        make_gen_row(t("dialog.family_tree.parents"), parents)
         make_gen_row("", [cat], highlight_all=True)
         if children:
-            make_gen_row("CHILDREN", children[:8])
+            make_gen_row(t("dialog.family_tree.children"), children[:8])
             if len(children) > 8:
                 outer.addWidget(
                     _styled_label(
-                        f"  … and {len(children) - 8} more children",
+                        t("dialog.family_tree.more_children", count=len(children) - 8),
                         "color:#444; font-size:10px; padding-left:100px;",
                     )
                 )
         if grandchildren:
             unique_gc = list({id(g): g for g in grandchildren}.values())
-            make_gen_row("GRANDCHILDREN", unique_gc[:8])
+            make_gen_row(t("dialog.family_tree.grandchildren"), unique_gc[:8])
             if len(unique_gc) > 8:
                 outer.addWidget(
                     _styled_label(
-                        f"  … and {len(unique_gc) - 8} more grandchildren",
+                        t(
+                            "dialog.family_tree.more_grandchildren",
+                            count=len(unique_gc) - 8,
+                        ),
                         "color:#444; font-size:10px; padding-left:100px;",
                     )
                 )
 
         outer.addStretch()
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton(t("dialog.family_tree.close"))
         close_btn.clicked.connect(self.accept)
         outer.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
