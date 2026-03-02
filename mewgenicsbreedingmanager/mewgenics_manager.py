@@ -48,9 +48,15 @@ from PySide6.QtWidgets import (
 )
 
 try:
-    from .i18n import DEFAULT_LANGUAGE, available_languages, set_language, t
+    from .i18n import (
+        DEFAULT_LANGUAGE,
+        available_languages,
+        get_language,
+        set_language,
+        t,
+    )
 except ImportError:
-    from i18n import DEFAULT_LANGUAGE, available_languages, set_language, t
+    from i18n import DEFAULT_LANGUAGE, available_languages, get_language, set_language, t
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -842,15 +848,15 @@ def get_grandparents(cat: Cat) -> list[Cat]:
 def can_breed(a: Cat, b: Cat) -> tuple[bool, str]:
     """Return (ok, reason). reason is non-empty only when ok is False."""
     if a is b:
-        return False, "Cannot pair a cat with itself"
+        return False, t("breed.error.self_pair")
     ga, gb = a.gender_display, b.gender_display
     if ga == "M" and gb == "F":
         return True, ""
     if ga == "F" and gb == "M":
         return True, ""
     # Same sex
-    label = "female" if ga == "F" else "male"
-    return False, f"Both cats are {label} — cannot produce offspring"
+    label = t("breed.sex_label.female") if ga == "F" else t("breed.sex_label.male")
+    return False, t("breed.error.same_sex", label=label)
 
 
 # ── Compatibility check ───────────────────────────────────────────────────────
@@ -1466,7 +1472,7 @@ class CatDetailPanel(QWidget):
                     break
 
         if self._show_lineage:
-            tree_btn = QPushButton("Family Tree…")
+            tree_btn = QPushButton(t("detail.family_tree_button"))
             tree_btn.setStyleSheet(
                 "QPushButton { color:#5a8aaa; background:transparent; border:1px solid #252545;"
                 " padding:3px 8px; border-radius:4px; font-size:10px; }"
@@ -1484,7 +1490,7 @@ class CatDetailPanel(QWidget):
             root.addWidget(_vsep())
             ab = QVBoxLayout()
             ab.setSpacing(4)
-            ab.addWidget(_sec("ABILITIES"))
+            ab.addWidget(_sec(t("detail.section.abilities")))
             ab.addWidget(ChipRow(cat.abilities, tooltip_fn=_ability_tip))
             ab.addStretch()
             root.addLayout(ab)
@@ -1494,7 +1500,7 @@ class CatDetailPanel(QWidget):
             root.addWidget(_vsep())
             mu = QVBoxLayout()
             mu.setSpacing(4)
-            mu.addWidget(_sec("MUTATIONS"))
+            mu.addWidget(_sec(t("detail.section.mutations")))
             mu.addWidget(ChipRow(cat.mutations, tooltip_fn=_ability_tip))
             mu.addStretch()
             root.addLayout(mu)
@@ -1504,7 +1510,7 @@ class CatDetailPanel(QWidget):
             root.addWidget(_vsep())
             eq = QVBoxLayout()
             eq.setSpacing(4)
-            eq.addWidget(_sec("EQUIPMENT"))
+            eq.addWidget(_sec(t("detail.section.equipment")))
             eq.addWidget(ChipRow(cat.equipment))
             eq.addStretch()
             root.addLayout(eq)
@@ -1516,7 +1522,7 @@ class CatDetailPanel(QWidget):
             root.addWidget(_vsep())
             anc = QVBoxLayout()
             anc.setSpacing(4)
-            anc.addWidget(_sec("LINEAGE"))
+            anc.addWidget(_sec(t("detail.section.lineage")))
 
             p_names = " × ".join(f"{p.name} ({p.gender_display})" for p in parents)
             pl = QLabel(p_names)
@@ -1538,10 +1544,10 @@ class CatDetailPanel(QWidget):
             rel = QVBoxLayout()
             rel.setSpacing(4)
             if cat.lovers:
-                rel.addWidget(_sec("LOVERS"))
+                rel.addWidget(_sec(t("detail.section.lovers")))
                 rel.addWidget(ChipRow([c.name for c in cat.lovers]))
             if cat.haters:
-                rel.addWidget(_sec("HATERS"))
+                rel.addWidget(_sec(t("detail.section.haters")))
                 hl = ChipRow([c.name for c in cat.haters])
                 hl_layout = hl.layout()
                 if hl_layout is not None:
@@ -1655,7 +1661,7 @@ class CatDetailPanel(QWidget):
                 lbl_hb.addWidget(name_lbl)
                 lbl_hb.addWidget(gen_lbl)
             else:
-                off_lbl = QLabel("Offspring")
+                off_lbl = QLabel(t("detail.offspring"))
                 off_lbl.setStyleSheet("color:#555; font-size:10px; font-style:italic;")
                 lbl_hb.addWidget(off_lbl)
 
@@ -1706,7 +1712,7 @@ class CatDetailPanel(QWidget):
         # Abilities column
         ab_col = QVBoxLayout()
         ab_col.setSpacing(6)
-        ab_col.addWidget(_sec("ABILITIES"))
+        ab_col.addWidget(_sec(t("detail.section.abilities")))
         for cat in (a, b):
             if cat.abilities:
                 row = QHBoxLayout()
@@ -1730,7 +1736,7 @@ class CatDetailPanel(QWidget):
         if a.mutations or b.mutations:
             mc = QVBoxLayout()
             mc.setSpacing(4)
-            mc.addWidget(_sec("MUTATIONS"))
+            mc.addWidget(_sec(t("detail.section.mutations")))
             for cat in (a, b):
                 if cat.mutations:
                     mrow = QHBoxLayout()
@@ -1749,29 +1755,39 @@ class CatDetailPanel(QWidget):
         if self._show_lineage:
             lc = QVBoxLayout()
             lc.setSpacing(3)
-            lc.addWidget(_sec("LINEAGE"))
+            lc.addWidget(_sec(t("detail.section.lineage")))
             common = find_common_ancestors(a, b)
             is_direct = a in get_parents(b) or b in get_parents(a)
             is_haters = b in getattr(a, "haters", []) or a in getattr(b, "haters", [])
 
             if is_haters:
-                lc.addWidget(
-                    _styled_label("⚠  These cats hate each other", _WARN_STYLE)
-                )
+                lc.addWidget(_styled_label(t("detail.warn.hate_each_other"), _WARN_STYLE))
             if is_direct:
-                lc.addWidget(_styled_label("⚠  Direct parent/offspring", _WARN_STYLE))
+                lc.addWidget(
+                    _styled_label(t("detail.warn.direct_parent_offspring"), _WARN_STYLE)
+                )
             elif common:
+                names = "  ·  ".join(c.short_name for c in common[:6])
+                suffix = "s" if (len(common) > 1 and get_language() == "en") else ""
                 lc.addWidget(
                     _styled_label(
-                        f"⚠  {len(common)} shared ancestor{'s' if len(common) > 1 else ''}: "
-                        + "  ·  ".join(c.short_name for c in common[:6]),
+                        t(
+                            "detail.warn.shared_ancestors",
+                            count=len(common),
+                            suffix=suffix,
+                            names=names,
+                        ),
                         _WARN_STYLE,
                     )
                 )
             elif get_parents(a) or get_parents(b):
-                lc.addWidget(_styled_label("✓  No shared ancestors", _SAFE_STYLE))
+                lc.addWidget(
+                    _styled_label(t("detail.safe.no_shared_ancestors"), _SAFE_STYLE)
+                )
             else:
-                lc.addWidget(_styled_label("—  Lineage unknown", _META_STYLE))
+                lc.addWidget(
+                    _styled_label(t("detail.meta.lineage_unknown"), _META_STYLE)
+                )
 
             lc.addStretch()
             bot.addLayout(lc)
