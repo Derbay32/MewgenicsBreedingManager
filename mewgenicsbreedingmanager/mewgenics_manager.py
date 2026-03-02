@@ -22,10 +22,11 @@ from PySide6.QtCore import (
     QItemSelectionModel,
     QModelIndex,
     QPersistentModelIndex,
+    QSettings,
     QSortFilterProxyModel,
     Qt,
 )
-from PySide6.QtGui import QAction, QBrush, QColor, QPalette
+from PySide6.QtGui import QAction, QActionGroup, QBrush, QColor, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -45,6 +46,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+try:
+    from .i18n import DEFAULT_LANGUAGE, available_languages, set_language, t
+except ImportError:
+    from i18n import DEFAULT_LANGUAGE, available_languages, set_language, t
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -1895,6 +1901,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Mewgenics Breeding Manager")
         self.resize(1440, 900)
+        self._settings = QSettings(
+            "MewgenicsBreedingManager", "MewgenicsBreedingManager"
+        )
+        stored_language = self._settings.value("ui/language", DEFAULT_LANGUAGE)
+        if not isinstance(stored_language, str):
+            stored_language = DEFAULT_LANGUAGE
+        self._ui_language = set_language(stored_language)
 
         self._current_save = None
         self._cats: list[Cat] = []
@@ -1939,6 +1952,52 @@ class MainWindow(QMainWindow):
         self._lineage_action.setChecked(False)
         self._lineage_action.triggered.connect(self._toggle_lineage)
         sm.addAction(self._lineage_action)
+
+        self._language_menu = sm.addMenu("")
+        self._language_group = QActionGroup(self)
+        self._language_group.setExclusive(True)
+
+        self._lang_en_action = QAction("", self)
+        self._lang_en_action.setCheckable(True)
+        self._lang_en_action.triggered.connect(
+            lambda checked=False: self._set_ui_language("en")
+        )
+        self._language_group.addAction(self._lang_en_action)
+        self._language_menu.addAction(self._lang_en_action)
+
+        self._lang_zh_action = QAction("", self)
+        self._lang_zh_action.setCheckable(True)
+        self._lang_zh_action.triggered.connect(
+            lambda checked=False: self._set_ui_language("zh")
+        )
+        self._language_group.addAction(self._lang_zh_action)
+        self._language_menu.addAction(self._lang_zh_action)
+
+        self._apply_language_menu_texts()
+        self._sync_language_actions()
+
+    def _sync_language_actions(self):
+        actions = (
+            (self._lang_en_action, "en"),
+            (self._lang_zh_action, "zh"),
+        )
+        for action, code in actions:
+            action.blockSignals(True)
+            action.setChecked(self._ui_language == code)
+            action.blockSignals(False)
+
+    def _apply_language_menu_texts(self):
+        self._language_menu.setTitle(t("menu.settings.language"))
+        self._lang_en_action.setText(t("menu.settings.language.en"))
+        self._lang_zh_action.setText(t("menu.settings.language.zh"))
+
+    def _set_ui_language(self, language: str):
+        if language not in available_languages():
+            return
+        self._ui_language = set_language(language)
+        self._settings.setValue("ui/language", self._ui_language)
+        self._apply_language_menu_texts()
+        self._sync_language_actions()
 
     # ── Layout ────────────────────────────────────────────────────────────
 
