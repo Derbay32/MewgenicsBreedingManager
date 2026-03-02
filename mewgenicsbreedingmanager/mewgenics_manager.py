@@ -51,12 +51,11 @@ try:
     from .i18n import (
         DEFAULT_LANGUAGE,
         available_languages,
-        get_language,
         set_language,
         t,
     )
 except ImportError:
-    from i18n import DEFAULT_LANGUAGE, available_languages, get_language, set_language, t
+    from i18n import DEFAULT_LANGUAGE, available_languages, set_language, t
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -99,17 +98,6 @@ STAT_COLORS = {
     7: QColor(30, 215, 100),
 }
 
-ROOM_DISPLAY = {
-    "Floor1_Large": "Ground Floor Left",
-    "Floor1_Small": "Ground Floor Right",
-    "Floor2_Large": "Second Floor",
-    "Floor2_Small": "Second Floor Right",
-    "Attic": "Attic",
-    "Attic_Large": "Attic",
-    "Basement": "Basement",
-    "Basement_Large": "Basement",
-}
-
 STATUS_ABBREV_KEYS = {
     "In House": "status.abbrev.house",
     "Adventure": "status.abbrev.away",
@@ -139,11 +127,7 @@ COLUMN_COUNT = len(COLUMN_LABEL_KEYS) + len(STAT_NAMES) + len(COLUMN_SUFFIX_KEYS
 
 
 def _room_display_name(room_key: str) -> str:
-    locale_key = f"room.{room_key}"
-    translated = t(locale_key)
-    if translated != locale_key:
-        return translated
-    return ROOM_DISPLAY.get(room_key, room_key)
+    return t(f"room.{room_key}")
 
 
 def _status_abbrev(status: str) -> str:
@@ -1253,8 +1237,12 @@ class CatTableModel(QAbstractTableModel):
                 n = STAT_NAMES[col - 4]
                 b = cat.base_stats[n]
                 total_stat = cat.total_stats[n]
-                extra = f"  (+{total_stat - b})" if total_stat != b else ""
-                return f"{n}  base: {b}{extra}  |  total: {total_stat}"
+                extra = (
+                    t("tooltip.stat.delta", delta=total_stat - b)
+                    if total_stat != b
+                    else ""
+                )
+                return t("tooltip.stat.base_total", stat=n, base=b, delta=extra, total=total_stat)
             if col == COL_ROOM:
                 return cat.room
             if col == COL_MUTS and cat.mutations:
@@ -1635,7 +1623,7 @@ class CatDetailPanel(QWidget):
             h.setAlignment(Qt.AlignmentFlag.AlignCenter)
             grid.addWidget(h, 0, j + 1)
         sum_col = len(STAT_NAMES) + 1
-        sh = QLabel("Sum")
+        sh = QLabel(t("table.col.sum"))
         sh.setStyleSheet("color:#455; font-size:9px; font-weight:bold;")
         sh.setAlignment(Qt.AlignmentFlag.AlignCenter)
         grid.addWidget(sh, 0, sum_col)
@@ -1769,13 +1757,11 @@ class CatDetailPanel(QWidget):
                 )
             elif common:
                 names = "  ·  ".join(c.short_name for c in common[:6])
-                suffix = "s" if (len(common) > 1 and get_language() == "en") else ""
                 lc.addWidget(
                     _styled_label(
                         t(
                             "detail.warn.shared_ancestors",
                             count=len(common),
-                            suffix=suffix,
                             names=names,
                         ),
                         _WARN_STYLE,
