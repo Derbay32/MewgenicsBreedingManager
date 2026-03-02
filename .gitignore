@@ -31,4 +31,4 @@ desktop.ini
 # screenshot.png intentionally tracked for README
 
 # Local execution plan (kept out of VCS)
-/I18N_EXECUTION_PLAN.md
+docs/
