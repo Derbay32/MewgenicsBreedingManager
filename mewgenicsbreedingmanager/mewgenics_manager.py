@@ -7,36 +7,56 @@ Parsing logic based on pzx521521/mewgenics-save-editor.
 Requirements: pip install PySide6 lz4
 """
 
-import sys
-import re
-import struct
-import sqlite3
-import lz4.block
 import os
+import re
+import sqlite3
+import struct
+import sys
 from pathlib import Path
 from typing import Optional
 
-_IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
-
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTableView, QPushButton, QLabel, QFileDialog, QHeaderView,
-    QAbstractItemView, QSplitter, QFrame, QDialog, QGridLayout, QSizePolicy,
-    QLineEdit,
-)
+import lz4.block
 from PySide6.QtCore import (
-    Qt, QAbstractTableModel, QModelIndex, QSortFilterProxyModel,
-    QFileSystemWatcher, QItemSelectionModel,
+    QAbstractTableModel,
+    QFileSystemWatcher,
+    QItemSelectionModel,
+    QModelIndex,
+    QSortFilterProxyModel,
+    Qt,
 )
-from PySide6.QtGui import QColor, QBrush, QAction, QPalette
+from PySide6.QtGui import QAction, QBrush, QColor, QPalette
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QPushButton,
+    QSizePolicy,
+    QSplitter,
+    QTableView,
+    QVBoxLayout,
+    QWidget,
+)
+
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 _JUNK_STRINGS = frozenset({"none", "null", "", "defaultmove", "default_move"})
 
+
 def _valid_str(s) -> bool:
     """Reject None, empty, and game filler strings like 'none' or 'defaultmove'."""
     return bool(s) and s.strip().lower() not in _JUNK_STRINGS
+
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -44,40 +64,41 @@ STAT_NAMES = ["STR", "DEX", "CON", "INT", "SPD", "CHA", "LCK"]
 
 APPDATA_SAVE_DIR = os.path.join(
     os.environ.get("APPDATA", ""),
-    "Glaiel Games", "Mewgenics",
+    "Glaiel Games",
+    "Mewgenics",
 )
 
 STAT_COLORS = {
-    1: QColor(170, 40,  40),
-    2: QColor(195, 85,  40),
+    1: QColor(170, 40, 40),
+    2: QColor(195, 85, 40),
     3: QColor(190, 145, 40),
     4: QColor(100, 100, 115),
-    5: QColor(80,  160, 70),
-    6: QColor(50,  195, 80),
-    7: QColor(30,  215, 100),
+    5: QColor(80, 160, 70),
+    6: QColor(50, 195, 80),
+    7: QColor(30, 215, 100),
 }
 
 ROOM_DISPLAY = {
-    "Floor1_Large":   "Ground Floor Left",
-    "Floor1_Small":   "Ground Floor Right",
-    "Floor2_Large":   "Second Floor",
-    "Floor2_Small":   "Second Floor Right",
-    "Attic":          "Attic",
-    "Attic_Large":    "Attic",
-    "Basement":       "Basement",
+    "Floor1_Large": "Ground Floor Left",
+    "Floor1_Small": "Ground Floor Right",
+    "Floor2_Large": "Second Floor",
+    "Floor2_Small": "Second Floor Right",
+    "Attic": "Attic",
+    "Attic_Large": "Attic",
+    "Basement": "Basement",
     "Basement_Large": "Basement",
 }
 
 # Full status → abbreviated display in table cell
 STATUS_ABBREV = {
-    "In House":  "House",
+    "In House": "House",
     "Adventure": "Away",
-    "Gone":      "Gone",
+    "Gone": "Gone",
 }
 STATUS_COLOR = {
-    "In House":  QColor(50,  170, 110),
-    "Adventure": QColor(70,  120, 200),
-    "Gone":      QColor(80,   80,  90),
+    "In House": QColor(50, 170, 110),
+    "Adventure": QColor(70, 120, 200),
+    "Gone": QColor(80, 80, 90),
 }
 
 
@@ -87,292 +108,293 @@ STATUS_COLOR = {
 
 _ABILITY_LOOKUP: dict[str, str] = {
     # Birth defects
-    "twoedarm":           "-2 Strength",
-    "twotoedarm":         "-2 Strength",
-    "bentarm":            "-2 Speed",
-    "conjoinedbody":      "+2 Constitution, -3 Speed",
-    "lumpybody":          "Start each battle with 1 Bruise",
-    "malnourishedbody":   "-1 Constitution",
-    "turnersyndrome":     "-2 Intelligence",
-    "birdbeakears":       "Start each battle with Confusion 2",
-    "floppyears":         "Start each battle with Immobile 1",
-    "inwardeyes":         "Start each battle with Confusion 2",
-    "redeyes":            "Gain 5% miss chance every turn",
-    "blind":              "Start every battle with Blind 1",
-    "bushyeyebrow":       "-1 Luck",
-    "noeyebrows":         "-2 Charisma",
-    "sloth":              "-3 Charisma, Brace 1",
-    "conjoinedtwin":      "+2 Intelligence, -3 Charisma",
-    "bentleg":            "Trample — units moved through take damage",
-    "duckleg":            "-2 Speed, water does not slow movement",
-    "twoedleg":           "-2 Strength",
-    "twotoedleg":         "-2 Strength",
-    "nomouth":            "Can't use consumables, eat, or musical abilities",
-    "cleftlip":           "-2 Charisma",
-    "lumpytail":          "+1 Constitution, start with 1 Immobile",
-    "notail":             "-1 Dexterity",
-    "tailsack":           "-1 Speed, -1 Constitution",
+    "twoedarm": "-2 Strength",
+    "twotoedarm": "-2 Strength",
+    "bentarm": "-2 Speed",
+    "conjoinedbody": "+2 Constitution, -3 Speed",
+    "lumpybody": "Start each battle with 1 Bruise",
+    "malnourishedbody": "-1 Constitution",
+    "turnersyndrome": "-2 Intelligence",
+    "birdbeakears": "Start each battle with Confusion 2",
+    "floppyears": "Start each battle with Immobile 1",
+    "inwardeyes": "Start each battle with Confusion 2",
+    "redeyes": "Gain 5% miss chance every turn",
+    "blind": "Start every battle with Blind 1",
+    "bushyeyebrow": "-1 Luck",
+    "noeyebrows": "-2 Charisma",
+    "sloth": "-3 Charisma, Brace 1",
+    "conjoinedtwin": "+2 Intelligence, -3 Charisma",
+    "bentleg": "Trample — units moved through take damage",
+    "duckleg": "-2 Speed, water does not slow movement",
+    "twoedleg": "-2 Strength",
+    "twotoedleg": "-2 Strength",
+    "nomouth": "Can't use consumables, eat, or musical abilities",
+    "cleftlip": "-2 Charisma",
+    "lumpytail": "+1 Constitution, start with 1 Immobile",
+    "notail": "-1 Dexterity",
+    "tailsack": "-1 Speed, -1 Constitution",
     # Collarless passives
-    "180":                "When you use your basic attack, turn around and use it again.",
-    "amped":              "Gain +1 Speed at the end of your turn.",
-    "amplify":            "+1 Magic Damage.",
-    "animalhandler":      "Start each battle with a random vermin familiar.",
-    "bareminimum":        "Your stats can't go below 5.",
-    "charming":           "25% chance to inflict Charm on units that damage you.",
-    "daunt":              "Small enemies won't attack you.",
-    "dealer":             "You can use consumables on other units.",
-    "deathboon":          "When downed, all allies gain All Stats Up.",
-    "deathsdoor":         "While at 1 HP, spells cost 1 mana but can only be cast once per turn.",
-    "deathproof":         "While downed, 25% chance to revive with 1 HP at end of each round.",
-    "dirtyclaws":         "Attacks on Poisoned/Bleeding enemies inflict +1 Poison/Bleed.",
-    "etank":              "Start each battle with +20 unfilled max health.",
-    "fastfootsies":       "Immune to negative tile effects.",
-    "firstimpression":    "Start each battle with +1 Bonus Attack.",
-    "furious":            "Gain +1 Damage per critical hit. +5% critical hit chance.",
-    "gassy":              "When you take damage, knock back all adjacent units.",
-    "hotblooded":         "Burn you inflict is increased by 1.",
-    "infested":           "50% chance to spawn a flea familiar when you end your turn.",
-    "latebloomer":        "On your 5th turn, gain All Stats Up 3.",
-    "leader":             "Adjacent allies have +1 Damage and +1 Range.",
-    "longshot":           "+1 Range.",
-    "luckdrain":          "Steal luck from enemies you damage.",
-    "lucky":              "+4 Luck.",
-    "mange":              "Inflict Poison 1 on units that contact you.",
-    "mania":              "10% chance to restore all mana at the start of your turn.",
-    "metaldetector":      "5% chance to spawn a coin when you move over a tile.",
-    "mightofthemeek":     "Damage of 2 or less is always critical.",
-    "minime":             "Start each battle with a tiny duplicate cat at half your stats.",
-    "naturalhealing":     "+1 Health Regeneration.",
-    "overconfident":      "While at full HP, spells cost 2 less but you take double damage.",
-    "patience":           "If you end your turn without actions, gain an extra turn at end of round.",
-    "protection":         "Gain +1 Holy Shield.",
-    "pulp":               "When you kill a unit, it becomes meat.",
-    "rockin":             "Spawn 4 small rocks at the start of each battle.",
-    "santasangre":        "When downed, allies heal 12 HP. Excess healing becomes Shield.",
-    "scavenger":          "If trinket slot is empty, equip a small food item at battle start.",
-    "selfassured":        "Gain a random stat up whenever you down a unit.",
-    "serialkiller":       "After 3 kills, gain +6 Speed and backstabs have 100% crit.",
-    "skillshare":         "Your other passive is shared with all party cats at battle start.",
-    "slugger":            "+1 Damage.",
-    "study":              "Gain +1 Intelligence whenever you hit a new unit type.",
-    "unrestricted":       "Once-per-battle abilities can be cast once per turn instead.",
-    "unscarred":          "While at full HP, 100% critical hit chance.",
-    "wiggly":             "+25% Dodge Chance.",
-    "worms":              "50% chance to spawn a maggot familiar when you end your turn.",
-    "zenkaiboost":        "End battle at 1 HP → +1 random stat permanently, next battle starts with All Stats Up 3.",
+    "180": "When you use your basic attack, turn around and use it again.",
+    "amped": "Gain +1 Speed at the end of your turn.",
+    "amplify": "+1 Magic Damage.",
+    "animalhandler": "Start each battle with a random vermin familiar.",
+    "bareminimum": "Your stats can't go below 5.",
+    "charming": "25% chance to inflict Charm on units that damage you.",
+    "daunt": "Small enemies won't attack you.",
+    "dealer": "You can use consumables on other units.",
+    "deathboon": "When downed, all allies gain All Stats Up.",
+    "deathsdoor": "While at 1 HP, spells cost 1 mana but can only be cast once per turn.",
+    "deathproof": "While downed, 25% chance to revive with 1 HP at end of each round.",
+    "dirtyclaws": "Attacks on Poisoned/Bleeding enemies inflict +1 Poison/Bleed.",
+    "etank": "Start each battle with +20 unfilled max health.",
+    "fastfootsies": "Immune to negative tile effects.",
+    "firstimpression": "Start each battle with +1 Bonus Attack.",
+    "furious": "Gain +1 Damage per critical hit. +5% critical hit chance.",
+    "gassy": "When you take damage, knock back all adjacent units.",
+    "hotblooded": "Burn you inflict is increased by 1.",
+    "infested": "50% chance to spawn a flea familiar when you end your turn.",
+    "latebloomer": "On your 5th turn, gain All Stats Up 3.",
+    "leader": "Adjacent allies have +1 Damage and +1 Range.",
+    "longshot": "+1 Range.",
+    "luckdrain": "Steal luck from enemies you damage.",
+    "lucky": "+4 Luck.",
+    "mange": "Inflict Poison 1 on units that contact you.",
+    "mania": "10% chance to restore all mana at the start of your turn.",
+    "metaldetector": "5% chance to spawn a coin when you move over a tile.",
+    "mightofthemeek": "Damage of 2 or less is always critical.",
+    "minime": "Start each battle with a tiny duplicate cat at half your stats.",
+    "naturalhealing": "+1 Health Regeneration.",
+    "overconfident": "While at full HP, spells cost 2 less but you take double damage.",
+    "patience": "If you end your turn without actions, gain an extra turn at end of round.",
+    "protection": "Gain +1 Holy Shield.",
+    "pulp": "When you kill a unit, it becomes meat.",
+    "rockin": "Spawn 4 small rocks at the start of each battle.",
+    "santasangre": "When downed, allies heal 12 HP. Excess healing becomes Shield.",
+    "scavenger": "If trinket slot is empty, equip a small food item at battle start.",
+    "selfassured": "Gain a random stat up whenever you down a unit.",
+    "serialkiller": "After 3 kills, gain +6 Speed and backstabs have 100% crit.",
+    "skillshare": "Your other passive is shared with all party cats at battle start.",
+    "slugger": "+1 Damage.",
+    "study": "Gain +1 Intelligence whenever you hit a new unit type.",
+    "unrestricted": "Once-per-battle abilities can be cast once per turn instead.",
+    "unscarred": "While at full HP, 100% critical hit chance.",
+    "wiggly": "+25% Dodge Chance.",
+    "worms": "50% chance to spawn a maggot familiar when you end your turn.",
+    "zenkaiboost": "End battle at 1 HP → +1 random stat permanently, next battle starts with All Stats Up 3.",
     # Fighter passives
-    "avenger":            "When an allied cat is downed, gain All Stats Up 2 and heal 8.",
-    "boned":              "When you kill a unit without a weapon, gain a Bone Club.",
-    "dualwield":          "When you use your weapon, automatically use it again for free.",
-    "fervor":             "When you down a unit, heal 5 HP.",
-    "frenzy":             "When you down a unit, gain +2 Strength.",
-    "hamsterstyle":       "+1 INT, -1 STR, +1 CON, +1 Health Regen, start with 2 Bonus Moves.",
-    "hulkup":             "When you take damage, gain +2 Speed.",
-    "math":               "Spells cost 3 mana but can only be cast once per turn.",
-    "merciless":          "10+ damage in a single hit: +2 Shield and refresh movement action.",
-    "overpowered":        "Excess damage causes enemies to explode, dealing overflow to nearby units.",
-    "patellarreflex":     "When damaged, counter-attack for 1 damage + Bruise.",
-    "punchface":          "Basic attacks hitting the front of a unit are always critical.",
-    "ratstyle":           "+2 Speed, +10% Dodge Chance.",
-    "scars":              "Start with +1 Brace.",
-    "skullcrack":         "Your basic attack inflicts Bruise.",
-    "smash":              "Weapons deal triple damage but always break when used.",
-    "thickskull":         "All injuries are Concussions. +3 Shield per concussion (max 30).",
-    "turtlestyle":        "+4 Armor, +2 Vitality, -1 Speed.",
-    "underdog":           "+2 STR and +1 Brace for each adjacent enemy.",
-    "vengeful":           "Basic attack is always critical against enemies that have damaged you.",
-    "weaponmaster":       "Weapon/item abilities deal +2 Damage and +25% critical chance.",
+    "avenger": "When an allied cat is downed, gain All Stats Up 2 and heal 8.",
+    "boned": "When you kill a unit without a weapon, gain a Bone Club.",
+    "dualwield": "When you use your weapon, automatically use it again for free.",
+    "fervor": "When you down a unit, heal 5 HP.",
+    "frenzy": "When you down a unit, gain +2 Strength.",
+    "hamsterstyle": "+1 INT, -1 STR, +1 CON, +1 Health Regen, start with 2 Bonus Moves.",
+    "hulkup": "When you take damage, gain +2 Speed.",
+    "math": "Spells cost 3 mana but can only be cast once per turn.",
+    "merciless": "10+ damage in a single hit: +2 Shield and refresh movement action.",
+    "overpowered": "Excess damage causes enemies to explode, dealing overflow to nearby units.",
+    "patellarreflex": "When damaged, counter-attack for 1 damage + Bruise.",
+    "punchface": "Basic attacks hitting the front of a unit are always critical.",
+    "ratstyle": "+2 Speed, +10% Dodge Chance.",
+    "scars": "Start with +1 Brace.",
+    "skullcrack": "Your basic attack inflicts Bruise.",
+    "smash": "Weapons deal triple damage but always break when used.",
+    "thickskull": "All injuries are Concussions. +3 Shield per concussion (max 30).",
+    "turtlestyle": "+4 Armor, +2 Vitality, -1 Speed.",
+    "underdog": "+2 STR and +1 Brace for each adjacent enemy.",
+    "vengeful": "Basic attack is always critical against enemies that have damaged you.",
+    "weaponmaster": "Weapon/item abilities deal +2 Damage and +25% critical chance.",
     # Tank passives
-    "bouncer":            "When an ally takes damage, move toward the source and attack if possible.",
-    "chainknockback":     "Basic attack gains +1 Knockback; knocked-back units knock back others.",
-    "hardhead":           "You block attacks from the front.",
-    "hardy":              "Heal to full HP at the start of each battle.",
-    "heavyhanded":        "+2 Knockback Damage.",
-    "homerun":            "Increases all Knockback by 10.",
-    "mountainform":       "Knockback immunity. Tiles walked over become dirt and may spawn rocks.",
-    "petrocks":           "Each rock you spawn becomes a Pet Rock. One Pet Rock spawns per combat.",
-    "plow":               "When you knock back a unit, leave a rock where it was.",
-    "prioritytarget":     "Enemies attack you instead of allies if they can.",
-    "protective":         "Your allies have Brace 1.",
-    "scabs":              "Gain +2 Shield when you take damage from an ability.",
-    "slackoff":           "If you end your turn with unused movement, gain 8 HP.",
-    "slowandsteady":      "At speed 0 or below, attack an extra time per turn. -2 SPD, +1 Range/turn.",
-    "stoic":              "If you end your turn with unused movement, gain +2 Bonus Moves.",
-    "thorns":             "Start with Thorns 2. Gain +1 Thorns when you take damage.",
-    "thunderthighs":      "Trample. Contact effects from abilities/items apply when trampling.",
-    "toadstyle":          "Movement action is a jump; landing on a unit deals damage and displaces it.",
-    "wrestlemaniac":      "Basic attack becomes Suplex when adjacent to enemies. Gain Toss ability.",
+    "bouncer": "When an ally takes damage, move toward the source and attack if possible.",
+    "chainknockback": "Basic attack gains +1 Knockback; knocked-back units knock back others.",
+    "hardhead": "You block attacks from the front.",
+    "hardy": "Heal to full HP at the start of each battle.",
+    "heavyhanded": "+2 Knockback Damage.",
+    "homerun": "Increases all Knockback by 10.",
+    "mountainform": "Knockback immunity. Tiles walked over become dirt and may spawn rocks.",
+    "petrocks": "Each rock you spawn becomes a Pet Rock. One Pet Rock spawns per combat.",
+    "plow": "When you knock back a unit, leave a rock where it was.",
+    "prioritytarget": "Enemies attack you instead of allies if they can.",
+    "protective": "Your allies have Brace 1.",
+    "scabs": "Gain +2 Shield when you take damage from an ability.",
+    "slackoff": "If you end your turn with unused movement, gain 8 HP.",
+    "slowandsteady": "At speed 0 or below, attack an extra time per turn. -2 SPD, +1 Range/turn.",
+    "stoic": "If you end your turn with unused movement, gain +2 Bonus Moves.",
+    "thorns": "Start with Thorns 2. Gain +1 Thorns when you take damage.",
+    "thunderthighs": "Trample. Contact effects from abilities/items apply when trampling.",
+    "toadstyle": "Movement action is a jump; landing on a unit deals damage and displaces it.",
+    "wrestlemaniac": "Basic attack becomes Suplex when adjacent to enemies. Gain Toss ability.",
     # Psychic passives
-    "antigravity":        "Flying Movement. +1 SPD when using Gravity ability. Gravity costs -1 mana.",
-    "beckon":             "Your basic attack has +4 Knockback.",
-    "blink":              "33% chance to teleport to a random tile when targeted.",
-    "eldritchvisage":     "Start of your turn: inflict Magic Weakness 1 on all enemies in line of sight.",
-    "enlightened":        "While at full mana, the first spell you cast each turn is free.",
-    "fullpower":          "While at full mana, basic attack deals triple damage and has +3 Knockback.",
-    "glow":               "Your basic attack inflicts Blind.",
-    "omniscience":        "All line-of-sight restrictions ignored. Hidden enemies are always highlighted.",
-    "overflow":           "While at full mana, gain +2 Brace and Flying Movement. Mana is uncapped.",
-    "psionicrepel":       "Units that attack or contact you get knocked back 10 tiles.",
-    "psysmack":           "Knockback damage you and allies deal is doubled.",
-    "soulshatter":        "When you kill a unit, deal 1 damage to all enemies.",
-    "truesight":          "You and your allies can't miss enemies within your line of sight.",
-    "wither":             "Gravity abilities inflict a random negative status on enemies.",
+    "antigravity": "Flying Movement. +1 SPD when using Gravity ability. Gravity costs -1 mana.",
+    "beckon": "Your basic attack has +4 Knockback.",
+    "blink": "33% chance to teleport to a random tile when targeted.",
+    "eldritchvisage": "Start of your turn: inflict Magic Weakness 1 on all enemies in line of sight.",
+    "enlightened": "While at full mana, the first spell you cast each turn is free.",
+    "fullpower": "While at full mana, basic attack deals triple damage and has +3 Knockback.",
+    "glow": "Your basic attack inflicts Blind.",
+    "omniscience": "All line-of-sight restrictions ignored. Hidden enemies are always highlighted.",
+    "overflow": "While at full mana, gain +2 Brace and Flying Movement. Mana is uncapped.",
+    "psionicrepel": "Units that attack or contact you get knocked back 10 tiles.",
+    "psysmack": "Knockback damage you and allies deal is doubled.",
+    "soulshatter": "When you kill a unit, deal 1 damage to all enemies.",
+    "truesight": "You and your allies can't miss enemies within your line of sight.",
+    "wither": "Gravity abilities inflict a random negative status on enemies.",
     # Necromancer passives
-    "bedbugs":            "Start battles with 2 beefy leech familiars.",
-    "cambionconception":  "When downed, spawn a demon kitten familiar.",
-    "eternalhealth":      "Suffer only Jinxed when downed; heal to full when your party wins.",
-    "infected":           "When you down a unit, reanimate it with 50% HP.",
-    "lastgrasp":          "When downed, each enemy takes 6 damage and each ally heals 6 HP.",
-    "leechmother":        "Your basic attack spawns a leech familiar.",
-    "onewithnothing":     "If you end your turn with 0 mana, Mana Regeneration is doubled.",
-    "parasitic":          "When you gain health, spawn a leech familiar.",
-    "relentlessdead":     "At end of each round, spawn a Zombie kitten familiar onto a random tile.",
-    "sacrificiallamb":    "When downed, allies gain All Stats Up and take an extra turn.",
-    "soulbond":           "Your basic attack inflicts Soul Link.",
-    "spreadsorrow":       "When you inflict a debuff, also inflict it on another random enemy.",
-    "superstition":       "Basic attack inflicts -1 Luck. Units that damage you also lose 1 Luck.",
-    "torpor":             "While downed, basic attack is Haunt. Your body gains +6 corpse HP.",
-    "undeath":            "When downed, reanimate each ally to 33% HP. (Once per battle.)",
-    "vampirism":          "Your basic attack has Lifesteal.",
+    "bedbugs": "Start battles with 2 beefy leech familiars.",
+    "cambionconception": "When downed, spawn a demon kitten familiar.",
+    "eternalhealth": "Suffer only Jinxed when downed; heal to full when your party wins.",
+    "infected": "When you down a unit, reanimate it with 50% HP.",
+    "lastgrasp": "When downed, each enemy takes 6 damage and each ally heals 6 HP.",
+    "leechmother": "Your basic attack spawns a leech familiar.",
+    "onewithnothing": "If you end your turn with 0 mana, Mana Regeneration is doubled.",
+    "parasitic": "When you gain health, spawn a leech familiar.",
+    "relentlessdead": "At end of each round, spawn a Zombie kitten familiar onto a random tile.",
+    "sacrificiallamb": "When downed, allies gain All Stats Up and take an extra turn.",
+    "soulbond": "Your basic attack inflicts Soul Link.",
+    "spreadsorrow": "When you inflict a debuff, also inflict it on another random enemy.",
+    "superstition": "Basic attack inflicts -1 Luck. Units that damage you also lose 1 Luck.",
+    "torpor": "While downed, basic attack is Haunt. Your body gains +6 corpse HP.",
+    "undeath": "When downed, reanimate each ally to 33% HP. (Once per battle.)",
+    "vampirism": "Your basic attack has Lifesteal.",
     # Thief passives
-    "afterimage":         "When you move, spawn a shadow that mimics your basic action.",
-    "agile":              "+2 Movement Range. Move a 2nd time if not using full range.",
-    "backstabber":        "Your backstabs are always critical.",
-    "bountyhunter":       "During your turn, one random enemy has a Bounty.",
-    "burgle":             "Your basic attack gains you 1 coin when it deals damage.",
-    "cripple":            "Your critical hits inflict Immobilize and Weakness 2.",
-    "critical":           "Critical hits deal +100% more damage. Gain +1 Luck per critical hit.",
-    "doublethrow":        "Your basic attack hits twice for half damage.",
-    "firststrike":        "Gain an extra turn at the start of battle.",
-    "goldenclaws":        "+1 Damage for each coin you collect.",
-    "more":               "When you kill a unit, refresh your movement action.",
-    "penetrate":          "Basic attack passes through units and ignores shield. +1 Range.",
-    "pinpoint":           "Your critical hits inflict Marked.",
-    "poisontips":         "Your basic attack inflicts Poison 1.",
-    "razorclaws":         "Your basic attack inflicts Bleed 1.",
-    "shank":              "When behind an enemy, basic attack hits 2 times using Strength.",
-    "shiv":               "Basic attack: +2 damage, +25% crit, inflicts Bleed 1 in melee range.",
-    "stealthed":          "Start each battle with Stealth.",
-    "sweetspot":          "+1 Range. Basic attack deals more damage the farther away you are.",
-    "weakspot":           "Basic attack ignores shield and inflicts Weakness 1.",
+    "afterimage": "When you move, spawn a shadow that mimics your basic action.",
+    "agile": "+2 Movement Range. Move a 2nd time if not using full range.",
+    "backstabber": "Your backstabs are always critical.",
+    "bountyhunter": "During your turn, one random enemy has a Bounty.",
+    "burgle": "Your basic attack gains you 1 coin when it deals damage.",
+    "cripple": "Your critical hits inflict Immobilize and Weakness 2.",
+    "critical": "Critical hits deal +100% more damage. Gain +1 Luck per critical hit.",
+    "doublethrow": "Your basic attack hits twice for half damage.",
+    "firststrike": "Gain an extra turn at the start of battle.",
+    "goldenclaws": "+1 Damage for each coin you collect.",
+    "more": "When you kill a unit, refresh your movement action.",
+    "penetrate": "Basic attack passes through units and ignores shield. +1 Range.",
+    "pinpoint": "Your critical hits inflict Marked.",
+    "poisontips": "Your basic attack inflicts Poison 1.",
+    "razorclaws": "Your basic attack inflicts Bleed 1.",
+    "shank": "When behind an enemy, basic attack hits 2 times using Strength.",
+    "shiv": "Basic attack: +2 damage, +25% crit, inflicts Bleed 1 in melee range.",
+    "stealthed": "Start each battle with Stealth.",
+    "sweetspot": "+1 Range. Basic attack deals more damage the farther away you are.",
+    "weakspot": "Basic attack ignores shield and inflicts Weakness 1.",
     # Hunter passives
-    "animalcontrol":      "Your basic attack causes units to immediately attack an enemy in range.",
-    "broodmother":        "Familiars and Charmed units gain +2 Damage and +5 HP.",
-    "bullseye":           "Your ranged attacks never miss. +25% critical hit chance.",
-    "fleabag":            "Spawn Flea familiars equal to kills this battle when your turn ends.",
-    "gravityfalls":       "+1 damage per tile beyond range 3.",
-    "hazardous":          "Tile damage and effects are doubled.",
-    "huntersboon":        "When you kill an enemy, gain 5 mana.",
-    "luckswing":          "+50% critical hit chance but +25% miss chance.",
-    "rubberarrows":       "Your projectiles bounce to another enemy within 3 tiles.",
-    "sniper":             "Critical hits deal +100% damage and have 25% chance to inflict Stun.",
-    "splitshot":          "Basic attack shoots multiple projectiles in a 5-tile cross (half damage each).",
-    "survivalist":        "4 healing consumables and a water bottle added. +2 food stored after each battle.",
-    "taintedmother":      "Familiars and Charmed units gain +4 Speed and inflict Poison and Bleed.",
-    "vampirism":          "Your basic attack has Lifesteal.",
+    "animalcontrol": "Your basic attack causes units to immediately attack an enemy in range.",
+    "broodmother": "Familiars and Charmed units gain +2 Damage and +5 HP.",
+    "bullseye": "Your ranged attacks never miss. +25% critical hit chance.",
+    "fleabag": "Spawn Flea familiars equal to kills this battle when your turn ends.",
+    "gravityfalls": "+1 damage per tile beyond range 3.",
+    "hazardous": "Tile damage and effects are doubled.",
+    "huntersboon": "When you kill an enemy, gain 5 mana.",
+    "luckswing": "+50% critical hit chance but +25% miss chance.",
+    "rubberarrows": "Your projectiles bounce to another enemy within 3 tiles.",
+    "sniper": "Critical hits deal +100% damage and have 25% chance to inflict Stun.",
+    "splitshot": "Basic attack shoots multiple projectiles in a 5-tile cross (half damage each).",
+    "survivalist": "4 healing consumables and a water bottle added. +2 food stored after each battle.",
+    "taintedmother": "Familiars and Charmed units gain +4 Speed and inflict Poison and Bleed.",
+    "vampirism": "Your basic attack has Lifesteal.",
     # Cleric passives
-    "angelic":            "When you heal an ally, they also gain mana.",
-    "blessed":            "Gain +1 to 2 random stats at the start of each turn.",
-    "devoted":            "Healing you provide is doubled.",
-    "holyaura":           "Allies adjacent to you gain +1 Brace.",
-    "inspiration":        "When you heal an ally, they gain +1 Damage.",
-    "martyrdom":          "When you take damage, all allies heal 1 HP.",
-    "pacifist":           "Your basic attack heals instead of dealing damage.",
-    "radiant":            "Your healing abilities also deal damage to nearby enemies.",
-    "sanctuary":          "Allies in your line of sight are immune to debuffs.",
-    "smite":              "Holy damage you deal is doubled.",
+    "angelic": "When you heal an ally, they also gain mana.",
+    "blessed": "Gain +1 to 2 random stats at the start of each turn.",
+    "devoted": "Healing you provide is doubled.",
+    "holyaura": "Allies adjacent to you gain +1 Brace.",
+    "inspiration": "When you heal an ally, they gain +1 Damage.",
+    "martyrdom": "When you take damage, all allies heal 1 HP.",
+    "pacifist": "Your basic attack heals instead of dealing damage.",
+    "radiant": "Your healing abilities also deal damage to nearby enemies.",
+    "sanctuary": "Allies in your line of sight are immune to debuffs.",
+    "smite": "Holy damage you deal is doubled.",
     # Mage passives
-    "arcanemastery":      "Your spells cost 1 less mana.",
-    "blastzone":          "Your AOE spells affect a larger area.",
-    "crystalclear":       "While at full mana, your spells deal +2 damage.",
-    "focused":            "+2 Intelligence. Your spells deal +1 damage.",
-    "magicshield":        "Gain +1 Shield when you cast a spell.",
-    "manaburn":           "Your spells inflict Mana Drain.",
-    "overload":           "When you run out of mana, deal damage equal to mana spent to all nearby enemies.",
-    "sorcerersoul":       "Access to Sorcerer class abilities when leveling up.",
-    "spellweaver":        "Casting the same spell twice in a row doubles its damage.",
-    "unstable":           "Your spells have 20% chance to be empowered for double damage.",
+    "arcanemastery": "Your spells cost 1 less mana.",
+    "blastzone": "Your AOE spells affect a larger area.",
+    "crystalclear": "While at full mana, your spells deal +2 damage.",
+    "focused": "+2 Intelligence. Your spells deal +1 damage.",
+    "magicshield": "Gain +1 Shield when you cast a spell.",
+    "manaburn": "Your spells inflict Mana Drain.",
+    "overload": "When you run out of mana, deal damage equal to mana spent to all nearby enemies.",
+    "sorcerersoul": "Access to Sorcerer class abilities when leveling up.",
+    "spellweaver": "Casting the same spell twice in a row doubles its damage.",
+    "unstable": "Your spells have 20% chance to be empowered for double damage.",
     # Monk passives
-    "acrobatics":         "+2 Movement Range. You can move through enemies.",
-    "concentration":      "If you don't move during your turn, your next attack is always critical.",
-    "counterattack":      "When damaged in melee, automatically counter-attack.",
-    "discipline":         "+2 to all stats at the start of each battle.",
-    "flowstate":          "After using an ability, gain +1 Speed for the rest of your turn.",
-    "harmonize":          "Your abilities heal allies they pass through.",
-    "innerpeace":         "+1 Health Regeneration and +1 Mana Regeneration per turn.",
-    "ironbody":           "+4 Constitution. You are immune to Stun and Immobilize.",
-    "reflexes":           "+10% Dodge Chance. Dodging an attack gives you +1 Speed.",
-    "zenmaster":          "While at full HP, all your abilities cost 0 mana.",
+    "acrobatics": "+2 Movement Range. You can move through enemies.",
+    "concentration": "If you don't move during your turn, your next attack is always critical.",
+    "counterattack": "When damaged in melee, automatically counter-attack.",
+    "discipline": "+2 to all stats at the start of each battle.",
+    "flowstate": "After using an ability, gain +1 Speed for the rest of your turn.",
+    "harmonize": "Your abilities heal allies they pass through.",
+    "innerpeace": "+1 Health Regeneration and +1 Mana Regeneration per turn.",
+    "ironbody": "+4 Constitution. You are immune to Stun and Immobilize.",
+    "reflexes": "+10% Dodge Chance. Dodging an attack gives you +1 Speed.",
+    "zenmaster": "While at full HP, all your abilities cost 0 mana.",
     # Druid passives
-    "barkaspect":         "Gain +1 Brace when you take damage.",
-    "earthbound":         "Immunity to knockback. Gain +2 Constitution.",
-    "floral":             "Spawn flowers that heal adjacent allies each turn.",
-    "growth":             "Gain +1 to a random stat at the end of each battle.",
-    "naturecall":         "Spawn a random nature familiar at the start of each battle.",
-    "photosynthesis":     "Regenerate 1 HP and 1 mana each turn when standing on grass/dirt.",
-    "pollinate":          "Your familiars spread healing pollen to adjacent allies.",
-    "primalrage":         "When you take damage, gain +1 Strength and +1 Speed (stacks).",
-    "regrowth":           "When downed, revive with 25% HP once per battle.",
-    "thornedbody":        "Units that attack you in melee take 2 damage.",
+    "barkaspect": "Gain +1 Brace when you take damage.",
+    "earthbound": "Immunity to knockback. Gain +2 Constitution.",
+    "floral": "Spawn flowers that heal adjacent allies each turn.",
+    "growth": "Gain +1 to a random stat at the end of each battle.",
+    "naturecall": "Spawn a random nature familiar at the start of each battle.",
+    "photosynthesis": "Regenerate 1 HP and 1 mana each turn when standing on grass/dirt.",
+    "pollinate": "Your familiars spread healing pollen to adjacent allies.",
+    "primalrage": "When you take damage, gain +1 Strength and +1 Speed (stacks).",
+    "regrowth": "When downed, revive with 25% HP once per battle.",
+    "thornedbody": "Units that attack you in melee take 2 damage.",
     # Jester passives
-    "allofthem":          "Gain a copy of the last ability used by any unit this battle.",
-    "alsorandom":         "At the start of your turn, gain a random status effect.",
-    "chaosmagic":         "Your abilities have random additional effects.",
-    "clumsy":             "50% chance to hit adjacent allies when attacking.",
-    "copycat":            "Your basic attack copies the last ability used by an ally.",
-    "gambler":            "At battle start, randomly gain or lose 1-3 of each stat.",
-    "jackofalltrades":    "Gain one random ability from each class at the start of each battle.",
-    "jinx":               "Units adjacent to you have -2 Luck.",
-    "pandemonium":        "At the start of each round, swap positions with a random unit.",
-    "pratfall":           "When you miss, all allies gain +1 Damage for the next attack.",
+    "allofthem": "Gain a copy of the last ability used by any unit this battle.",
+    "alsorandom": "At the start of your turn, gain a random status effect.",
+    "chaosmagic": "Your abilities have random additional effects.",
+    "clumsy": "50% chance to hit adjacent allies when attacking.",
+    "copycat": "Your basic attack copies the last ability used by an ally.",
+    "gambler": "At battle start, randomly gain or lose 1-3 of each stat.",
+    "jackofalltrades": "Gain one random ability from each class at the start of each battle.",
+    "jinx": "Units adjacent to you have -2 Luck.",
+    "pandemonium": "At the start of each round, swap positions with a random unit.",
+    "pratfall": "When you miss, all allies gain +1 Damage for the next attack.",
     # Soul passives
-    "butcherssoul":       "Access to Butcher class abilities when leveling up.",
-    "clericsoul":         "Access to Cleric class abilities when leveling up.",
-    "druidsoul":          "Access to Druid class abilities when leveling up.",
-    "fighterssoul":       "Access to Fighter class abilities when leveling up.",
-    "hunterssoul":        "Access to Hunter class abilities when leveling up.",
-    "jesterssoul":        "Access to Jester class abilities when leveling up.",
-    "magessoul":          "Access to Mage class abilities when leveling up.",
-    "monkssoul":          "Access to Monk class abilities when leveling up.",
-    "necromancerssoul":   "Access to Necromancer class abilities when leveling up.",
-    "psychicssoul":       "Access to Psychic class abilities when leveling up.",
-    "tankssoul":          "Access to Tank class abilities when leveling up.",
-    "thiefsoul":          "Access to Thief class abilities when leveling up.",
-    "tinkerersoul":       "Access to Tinkerer class abilities when leveling up.",
-    "voidsoul":           "Only upgraded Collarless abilities offered on level up. Collarless spells cost 1 less mana.",
+    "butcherssoul": "Access to Butcher class abilities when leveling up.",
+    "clericsoul": "Access to Cleric class abilities when leveling up.",
+    "druidsoul": "Access to Druid class abilities when leveling up.",
+    "fighterssoul": "Access to Fighter class abilities when leveling up.",
+    "hunterssoul": "Access to Hunter class abilities when leveling up.",
+    "jesterssoul": "Access to Jester class abilities when leveling up.",
+    "magessoul": "Access to Mage class abilities when leveling up.",
+    "monkssoul": "Access to Monk class abilities when leveling up.",
+    "necromancerssoul": "Access to Necromancer class abilities when leveling up.",
+    "psychicssoul": "Access to Psychic class abilities when leveling up.",
+    "tankssoul": "Access to Tank class abilities when leveling up.",
+    "thiefsoul": "Access to Thief class abilities when leveling up.",
+    "tinkerersoul": "Access to Tinkerer class abilities when leveling up.",
+    "voidsoul": "Only upgraded Collarless abilities offered on level up. Collarless spells cost 1 less mana.",
 }
 
 
 def _ability_tip(name: str) -> str:
     """Return a tooltip description for an ability/mutation name, or '' if unknown."""
-    key = re.sub(r'[^a-z0-9]', '', name.lower())
+    key = re.sub(r"[^a-z0-9]", "", name.lower())
     return _ABILITY_LOOKUP.get(key, "")
 
 
 # ── Binary reader ─────────────────────────────────────────────────────────────
 
+
 class BinaryReader:
     def __init__(self, data, pos=0):
         self.data = data
-        self.pos  = pos
+        self.pos = pos
 
     def u32(self):
-        v = struct.unpack_from('<I', self.data, self.pos)[0]
+        v = struct.unpack_from("<I", self.data, self.pos)[0]
         self.pos += 4
         return v
 
     def i32(self):
-        v = struct.unpack_from('<i', self.data, self.pos)[0]
+        v = struct.unpack_from("<i", self.data, self.pos)[0]
         self.pos += 4
         return v
 
     def u64(self):
-        lo, hi = struct.unpack_from('<II', self.data, self.pos)
+        lo, hi = struct.unpack_from("<II", self.data, self.pos)
         self.pos += 8
         return lo + hi * 4_294_967_296
 
     def f64(self):
-        v = struct.unpack_from('<d', self.data, self.pos)[0]
+        v = struct.unpack_from("<d", self.data, self.pos)[0]
         self.pos += 8
         return v
 
@@ -383,7 +405,9 @@ class BinaryReader:
             if length < 0 or length > 10_000:
                 self.pos = start
                 return None
-            s = self.data[self.pos:self.pos + int(length)].decode('utf-8', errors='ignore')
+            s = self.data[self.pos : self.pos + int(length)].decode(
+                "utf-8", errors="ignore"
+            )
             self.pos += int(length)
             return s
         except Exception:
@@ -392,8 +416,10 @@ class BinaryReader:
 
     def utf16str(self):
         char_count = self.u64()
-        byte_len   = int(char_count * 2)
-        s = self.data[self.pos:self.pos + byte_len].decode('utf-16le', errors='ignore')
+        byte_len = int(char_count * 2)
+        s = self.data[self.pos : self.pos + byte_len].decode(
+            "utf-16le", errors="ignore"
+        )
         self.pos += byte_len
         return s
 
@@ -409,7 +435,10 @@ class BinaryReader:
 
 # ── Parent UID scanner ────────────────────────────────────────────────────────
 
-def _scan_blob_for_parent_uids(raw: bytes, uid_set: frozenset, self_uid: int) -> tuple[int, int]:
+
+def _scan_blob_for_parent_uids(
+    raw: bytes, uid_set: frozenset, self_uid: int
+) -> tuple[int, int]:
     """
     Scan the decompressed blob byte-by-byte looking for two consecutive u64
     values (4-byte aligned) that are in uid_set and are not self_uid.
@@ -421,15 +450,15 @@ def _scan_blob_for_parent_uids(raw: bytes, uid_set: frozenset, self_uid: int) ->
     limit = min(1024, len(raw) - 16)
     i = 12  # skip breed_id(4) + own uid(8)
     while i <= limit - 16:
-        lo1, hi1 = struct.unpack_from('<II', raw, i)
+        lo1, hi1 = struct.unpack_from("<II", raw, i)
         v1 = lo1 + hi1 * 4_294_967_296
         if v1 in uid_set and v1 != self_uid:
-            lo2, hi2 = struct.unpack_from('<II', raw, i + 8)
+            lo2, hi2 = struct.unpack_from("<II", raw, i + 8)
             v2 = lo2 + hi2 * 4_294_967_296
             if v2 in uid_set and v2 != self_uid:
-                return v1, v2          # both parents found
+                return v1, v2  # both parents found
             if v2 == 0:
-                return v1, 0           # one parent (other unknown)
+                return v1, 0  # one parent (other unknown)
         i += 4  # u64-aligned steps
     return 0, 0
 
@@ -438,10 +467,22 @@ def _scan_blob_for_parent_uids(raw: bytes, uid_set: frozenset, self_uid: int) ->
 
 # 14 body-part slots (0-indexed); slot_id ≥ 300 in the blob = active mutation
 VISUAL_MUT_NAMES = [
-    "Body", "Head", "Tail", "Eye", "Ear",
-    "Leg", "Paw", "Belly", "Back", "Fur",
-    "Wing", "Horn", "Fang", "Mark",
+    "Body",
+    "Head",
+    "Tail",
+    "Eye",
+    "Ear",
+    "Leg",
+    "Paw",
+    "Belly",
+    "Back",
+    "Fur",
+    "Wing",
+    "Horn",
+    "Fang",
+    "Mark",
 ]
+
 
 def _find_mutation_table(raw: bytes) -> int:
     """
@@ -451,24 +492,25 @@ def _find_mutation_table(raw: bytes) -> int:
       entries 1-14: 20 bytes each, second u32 (coat_id or 0) validated for ≥10 slots.
     Returns base offset, or -1 if not found.
     """
-    size = 16 + 14 * 20   # 296 bytes
+    size = 16 + 14 * 20  # 296 bytes
     limit = len(raw) - size
     for base in range(limit):
-        scale = struct.unpack_from('<f', raw, base)[0]
+        scale = struct.unpack_from("<f", raw, base)[0]
         if not (0.05 <= scale <= 20.0):
             continue
-        coat = struct.unpack_from('<I', raw, base + 4)[0]
+        coat = struct.unpack_from("<I", raw, base + 4)[0]
         if coat == 0 or coat > 20_000:
             continue
-        t1 = struct.unpack_from('<I', raw, base + 8)[0]
+        t1 = struct.unpack_from("<I", raw, base + 8)[0]
         if t1 > 500:
             continue
-        t2 = struct.unpack_from('<I', raw, base + 12)[0]
+        t2 = struct.unpack_from("<I", raw, base + 12)[0]
         if t2 != 0xFFFF_FFFF and t2 > 5_000:
             continue
         matches = sum(
-            1 for i in range(14)
-            if struct.unpack_from('<I', raw, base + 16 + i * 20 + 4)[0] in (coat, 0)
+            1
+            for i in range(14)
+            if struct.unpack_from("<I", raw, base + 16 + i * 20 + 4)[0] in (coat, 0)
         )
         if matches >= 10:
             return base
@@ -482,46 +524,51 @@ def _read_visual_mutations(raw: bytes) -> list:
         return []
     result = []
     for i in range(14):
-        slot_id = struct.unpack_from('<I', raw, base + 16 + i * 20)[0]
+        slot_id = struct.unpack_from("<I", raw, base + 16 + i * 20)[0]
         if slot_id >= 300:
-            name = VISUAL_MUT_NAMES[i] if i < len(VISUAL_MUT_NAMES) else f"Mutation{i+1}"
+            name = (
+                VISUAL_MUT_NAMES[i] if i < len(VISUAL_MUT_NAMES) else f"Mutation{i + 1}"
+            )
             result.append(f"{name} Mutation")
     return result
 
 
 # ── Cat ───────────────────────────────────────────────────────────────────────
 
+
 class Cat:
     # parent_a / parent_b are resolved after the full save is loaded
-    parent_a: Optional['Cat'] = None
-    parent_b: Optional['Cat'] = None
-    generation: int = 0   # generation depth: 0=stray, 1=child of strays, etc.
+    parent_a: Optional["Cat"] = None
+    parent_b: Optional["Cat"] = None
+    generation: int = 0  # generation depth: 0=stray, 1=child of strays, etc.
 
-    def __init__(self, blob: bytes, cat_key: int, house_info: dict, adventure_keys: set):
-        uncomp_size = struct.unpack('<I', blob[:4])[0]
+    def __init__(
+        self, blob: bytes, cat_key: int, house_info: dict, adventure_keys: set
+    ):
+        uncomp_size = struct.unpack("<I", blob[:4])[0]
         raw = lz4.block.decompress(blob[4:], uncompressed_size=uncomp_size)
-        r   = BinaryReader(raw)
-        self._raw = raw   # kept for parent-UID blob scan in parse_save
+        r = BinaryReader(raw)
+        self._raw = raw  # kept for parent-UID blob scan in parse_save
 
         self.db_key = cat_key
 
         # Location / status
         if cat_key in adventure_keys:
             self.status = "Adventure"
-            self.room   = "Adventure"
+            self.room = "Adventure"
         elif cat_key in house_info:
             self.status = "In House"
-            self.room   = house_info[cat_key]
+            self.room = house_info[cat_key]
         else:
             self.status = "Gone"
-            self.room   = ""
+            self.room = ""
 
         # Blob fields
         self.breed_id = r.u32()
-        self._uid_int = r.u64()            # cat's own unique id (seed)
+        self._uid_int = r.u64()  # cat's own unique id (seed)
         self.unique_id = hex(self._uid_int)
         self.name = r.utf16str()
-        _name_end = r.pos   # used below for reliable sex u16 read at _name_end+8
+        _name_end = r.pos  # used below for reliable sex u16 read at _name_end+8
 
         r.str()  # unknown string between name and parent refs
 
@@ -543,25 +590,27 @@ class Cat:
         r.f64()
 
         self.stat_base = [r.u32() for _ in range(7)]
-        self.stat_mod  = [r.i32() for _ in range(7)]
-        self.stat_sec  = [r.i32() for _ in range(7)]
+        self.stat_mod = [r.i32() for _ in range(7)]
+        self.stat_sec = [r.i32() for _ in range(7)]
 
-        self.base_stats  = {n: self.stat_base[i] for i, n in enumerate(STAT_NAMES)}
-        self.total_stats = {n: self.stat_base[i] + self.stat_mod[i] + self.stat_sec[i]
-                            for i, n in enumerate(STAT_NAMES)}
+        self.base_stats = {n: self.stat_base[i] for i, n in enumerate(STAT_NAMES)}
+        self.total_stats = {
+            n: self.stat_base[i] + self.stat_mod[i] + self.stat_sec[i]
+            for i, n in enumerate(STAT_NAMES)
+        }
 
         # Personality stats (aggression, libido, inbredness).
         # Exact offsets not yet documented; filled in by parse_save if found.
-        self.aggression  = None   # None = unknown
-        self.libido      = None
-        self.inbredness  = None
+        self.aggression = None  # None = unknown
+        self.libido = None
+        self.inbredness = None
 
         # Relationship scaffolds — resolved by parse_save after all cats loaded.
         self._lover_uids: list[int] = []
         self._hater_uids: list[int] = []
-        self.lovers:   list['Cat'] = []
-        self.haters:   list['Cat'] = []
-        self.children: list['Cat'] = []   # direct offspring; assigned by parse_save
+        self.lovers: list["Cat"] = []
+        self.haters: list["Cat"] = []
+        self.children: list["Cat"] = []  # direct offspring; assigned by parse_save
 
         # ── Ability run — anchored on "DefaultMove" ─────────────────────────
         # The ability block is a u64-length-prefixed ASCII identifier run.
@@ -575,13 +624,13 @@ class Cat:
         curr = r.pos
         run_start = -1
         for i in range(curr, min(curr + 600, len(raw) - 19)):
-            lo = struct.unpack_from('<I', raw, i)[0]
-            hi = struct.unpack_from('<I', raw, i + 4)[0]
+            lo = struct.unpack_from("<I", raw, i)[0]
+            hi = struct.unpack_from("<I", raw, i + 4)[0]
             if hi != 0 or not (1 <= lo <= 96):
                 continue
             try:
-                cand = raw[i + 8: i + 8 + lo].decode('ascii')
-                if cand == 'DefaultMove':
+                cand = raw[i + 8 : i + 8 + lo].decode("ascii")
+                if cand == "DefaultMove":
                     run_start = i
                     break
             except Exception:
@@ -608,11 +657,11 @@ class Cat:
                 passives.append(run_items[10])
 
             try:
-                r.u32()   # passive1 tier — discard
+                r.u32()  # passive1 tier — discard
             except Exception:
                 pass
 
-            for _ in range(3):   # Passive2, Disorder1, Disorder2
+            for _ in range(3):  # Passive2, Disorder1, Disorder2
                 saved = r.pos
                 item = r.str()
                 if item is None or not _IDENT_RE.match(item) or not _valid_str(item):
@@ -620,21 +669,23 @@ class Cat:
                     break
                 passives.append(item)
                 try:
-                    r.u32()   # tier — discard
+                    r.u32()  # tier — discard
                 except Exception:
                     pass
 
             self.mutations = passives
-            self.equipment = []   # equipment parsing requires separate byte-marker logic
+            self.equipment = []  # equipment parsing requires separate byte-marker logic
 
         else:
             # Fallback: old heuristic scan for any uppercase-starting ASCII string
             found = -1
             for i in range(curr, min(curr + 500, len(raw) - 9)):
-                length = struct.unpack_from('<I', raw, i)[0]
-                if (0 < length < 64
-                        and struct.unpack_from('<I', raw, i + 4)[0] == 0
-                        and 65 <= raw[i + 8] <= 90):
+                length = struct.unpack_from("<I", raw, i)[0]
+                if (
+                    0 < length < 64
+                    and struct.unpack_from("<I", raw, i + 4)[0] == 0
+                    and 65 <= raw[i + 8] <= 90
+                ):
                     found = i
                     break
             if found != -1:
@@ -670,7 +721,7 @@ class Cat:
         # ditto cats, where the parser position drifts and returns the wrong string).
         if self.gender not in ("male", "female"):
             try:
-                sex_u16 = struct.unpack_from('<H', raw, _name_end + 8)[0]
+                sex_u16 = struct.unpack_from("<H", raw, _name_end + 8)[0]
                 self.gender = {1: "male", 2: "female"}.get(sex_u16, "female")
             except Exception:
                 pass
@@ -686,8 +737,10 @@ class Cat:
     @property
     def gender_display(self) -> str:
         g = (self.gender or "").strip().lower()
-        if g.startswith("male"):   return "M"
-        if g.startswith("female"): return "F"
+        if g.startswith("male"):
+            return "M"
+        if g.startswith("female"):
+            return "F"
         return "F"  # unknown/ditto defaults to F
 
     @property
@@ -701,6 +754,7 @@ class Cat:
 
 
 # ── Ancestry helpers ──────────────────────────────────────────────────────────
+
 
 def get_all_ancestors(cat: Optional[Cat], depth: int = 6, _seen: set = None) -> set:
     """Return all ancestor Cat objects up to `depth` generations."""
@@ -749,48 +803,50 @@ def can_breed(a: Cat, b: Cat) -> tuple[bool, str]:
 
 # ── Compatibility check ───────────────────────────────────────────────────────
 
-def _compatibility(focus: 'Cat', other: 'Cat') -> str:
+
+def _compatibility(focus: "Cat", other: "Cat") -> str:
     """
     Returns one of: 'self' | 'incompatible' | 'risky' | 'ok'
     Used to dim rows in the table when a single cat is selected.
     """
     if focus is other:
-        return 'self'
+        return "self"
     ok, _ = can_breed(focus, other)
     if not ok:
-        return 'incompatible'
+        return "incompatible"
     # Hate relationship
-    if other in getattr(focus, 'haters', []) or focus in getattr(other, 'haters', []):
-        return 'incompatible'
+    if other in getattr(focus, "haters", []) or focus in getattr(other, "haters", []):
+        return "incompatible"
     # Direct parent/offspring
     if focus in get_parents(other) or other in get_parents(focus):
-        return 'incompatible'
+        return "incompatible"
     # Shared ancestors → inbreeding risk
     if find_common_ancestors(focus, other):
-        return 'risky'
-    return 'ok'
+        return "risky"
+    return "ok"
 
 
 # ── Save-file helpers ─────────────────────────────────────────────────────────
+
 
 def _get_house_info(conn) -> dict:
     row = conn.execute("SELECT data FROM files WHERE key = 'house_state'").fetchone()
     if not row or len(row[0]) < 8:
         return {}
-    data  = row[0]
-    count = struct.unpack_from('<I', data, 4)[0]
-    pos   = 8
+    data = row[0]
+    count = struct.unpack_from("<I", data, 4)[0]
+    pos = 8
     result = {}
     for _ in range(count):
         if pos + 8 > len(data):
             break
-        cat_key  = struct.unpack_from('<I', data, pos)[0]
+        cat_key = struct.unpack_from("<I", data, pos)[0]
         pos += 8
-        room_len = struct.unpack_from('<I', data, pos)[0]
+        room_len = struct.unpack_from("<I", data, pos)[0]
         pos += 8
         room_name = ""
         if room_len > 0:
-            room_name = data[pos:pos + room_len].decode('ascii', errors='ignore')
+            room_name = data[pos : pos + room_len].decode("ascii", errors="ignore")
             pos += room_len
         pos += 24
         result[cat_key] = room_name
@@ -800,16 +856,18 @@ def _get_house_info(conn) -> dict:
 def _get_adventure_keys(conn) -> set:
     keys = set()
     try:
-        row = conn.execute("SELECT data FROM files WHERE key = 'adventure_state'").fetchone()
+        row = conn.execute(
+            "SELECT data FROM files WHERE key = 'adventure_state'"
+        ).fetchone()
         if not row or len(row[0]) < 8:
             return keys
-        data  = row[0]
-        count = struct.unpack_from('<I', data, 4)[0]
-        pos   = 8
+        data = row[0]
+        count = struct.unpack_from("<I", data, 4)[0]
+        pos = 8
         for _ in range(count):
             if pos + 8 > len(data):
                 break
-            val = struct.unpack_from('<Q', data, pos)[0]
+            val = struct.unpack_from("<Q", data, pos)[0]
             pos += 8
             cat_key = (val >> 32) & 0xFFFF_FFFF
             if cat_key:
@@ -841,12 +899,12 @@ def _parse_pedigree(conn) -> dict:
         return {}
 
     NULL = 0xFFFF_FFFF_FFFF_FFFF
-    MAX_KEY = 1_000_000   # anything larger is a legacy UID or garbage
+    MAX_KEY = 1_000_000  # anything larger is a legacy UID or garbage
     ped_map: dict = {}
 
     # Entries start at offset 8 (after a single u64 header), stride 32
     for pos in range(8, len(data) - 31, 32):
-        cat_k, pa_k, pb_k, _ = struct.unpack_from('<QQQQ', data, pos)
+        cat_k, pa_k, pb_k, _ = struct.unpack_from("<QQQQ", data, pos)
         if cat_k == 0 or cat_k == NULL or cat_k > MAX_KEY:
             continue
         pa = int(pa_k) if pa_k != NULL and 0 < pa_k <= MAX_KEY else None
@@ -860,10 +918,10 @@ def _parse_pedigree(conn) -> dict:
 
 
 def parse_save(path: str) -> tuple[list, list]:
-    conn  = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     house = _get_house_info(conn)
-    adv   = _get_adventure_keys(conn)
-    rows  = conn.execute("SELECT key, data FROM cats").fetchall()
+    adv = _get_adventure_keys(conn)
+    rows = conn.execute("SELECT key, data FROM cats").fetchall()
     ped_map = _parse_pedigree(conn)
     conn.close()
 
@@ -888,8 +946,10 @@ def parse_save(path: str) -> tuple[list, list]:
             pa = key_to_cat.get(pa_k)
             pb = key_to_cat.get(pb_k)
             # Sanity: a cat cannot be its own parent
-            if pa is cat: pa = None
-            if pb is cat: pb = None
+            if pa is cat:
+                pa = None
+            if pb is cat:
+                pb = None
         cat.parent_a = pa
         cat.parent_b = pb
 
@@ -905,6 +965,7 @@ def parse_save(path: str) -> tuple[list, list]:
     # Compute generation depth (0=stray, N=max parent gen + 1).
     # Uses memoisation; safe because circular parent refs are already blocked.
     _gen_cache: dict = {}
+
     def _get_gen(c: Cat) -> int:
         cid = id(c)
         if cid in _gen_cache:
@@ -917,6 +978,7 @@ def parse_save(path: str) -> tuple[list, list]:
         g = max(pa_g, pb_g) + 1
         _gen_cache[cid] = g
         return g
+
     for cat in cats:
         cat.generation = _get_gen(cat)
 
@@ -925,7 +987,7 @@ def parse_save(path: str) -> tuple[list, list]:
 
 def find_save_files() -> list[str]:
     saves = []
-    base  = Path(APPDATA_SAVE_DIR)
+    base = Path(APPDATA_SAVE_DIR)
     if not base.is_dir():
         return saves
     for profile in base.iterdir():
@@ -938,23 +1000,27 @@ def find_save_files() -> list[str]:
 
 # ── Qt table model ────────────────────────────────────────────────────────────
 
-COLUMNS   = ["Name", "♀/♂", "Room", "Status"] + STAT_NAMES + ["Sum", "Abilities", "Mutations", "Gen", "Source", "Inbr"]
-COL_NAME  = 0
-COL_GEN   = 1
-COL_ROOM  = 2
-COL_STAT  = 3
-STAT_COLS = list(range(4, 11))   # STR … LCK  (indices 4–10)
-COL_SUM   = 11
-COL_ABIL  = 12
-COL_MUTS  = 13
-COL_AGE   = 14   # generation depth
-COL_SRC   = 15
-COL_INB   = 16
+COLUMNS = (
+    ["Name", "♀/♂", "Room", "Status"]
+    + STAT_NAMES
+    + ["Sum", "Abilities", "Mutations", "Gen", "Source", "Inbr"]
+)
+COL_NAME = 0
+COL_GEN = 1
+COL_ROOM = 2
+COL_STAT = 3
+STAT_COLS = list(range(4, 11))  # STR … LCK  (indices 4–10)
+COL_SUM = 11
+COL_ABIL = 12
+COL_MUTS = 13
+COL_AGE = 14  # generation depth
+COL_SRC = 15
+COL_INB = 16
 
 # Fixed pixel widths for narrow columns
 _W_STATUS = 62
-_W_STAT   = 34
-_W_GEN    = 28
+_W_STAT = 34
+_W_GEN = 28
 
 
 class CatTableModel(QAbstractTableModel):
@@ -987,8 +1053,11 @@ class CatTableModel(QAbstractTableModel):
                 [Qt.BackgroundRole, Qt.ForegroundRole],
             )
 
-    def rowCount(self, parent=QModelIndex()):    return len(self._cats)
-    def columnCount(self, parent=QModelIndex()): return len(COLUMNS)
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._cats)
+
+    def columnCount(self, parent=QModelIndex()):
+        return len(COLUMNS)
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:
@@ -1002,10 +1071,14 @@ class CatTableModel(QAbstractTableModel):
         col = index.column()
 
         if role == Qt.DisplayRole:
-            if col == COL_NAME: return cat.name
-            if col == COL_GEN:  return cat.gender_display
-            if col == COL_ROOM: return cat.room_display
-            if col == COL_STAT: return STATUS_ABBREV.get(cat.status, cat.status)
+            if col == COL_NAME:
+                return cat.name
+            if col == COL_GEN:
+                return cat.gender_display
+            if col == COL_ROOM:
+                return cat.room_display
+            if col == COL_STAT:
+                return STATUS_ABBREV.get(cat.status, cat.status)
             if col in STAT_COLS:
                 return str(cat.base_stats[STAT_NAMES[col - 4]])
             if col == COL_SUM:
@@ -1020,8 +1093,10 @@ class CatTableModel(QAbstractTableModel):
                 pa, pb = cat.parent_a, cat.parent_b
                 if pa is None and pb is None:
                     return "Stray"
+
                 def _pname(p):
                     return p.name if p.status != "Gone" else f"{p.name} (gone)"
+
                 return " × ".join(_pname(p) for p in (pa, pb) if p is not None)
             if col == COL_INB:
                 if cat.parent_a is None or cat.parent_b is None:
@@ -1045,21 +1120,35 @@ class CatTableModel(QAbstractTableModel):
                 else None
             )
             # Suppress risky highlight when lineage features are off
-            if compat == 'risky' and not self._show_lineage:
-                compat = 'ok'
+            if compat == "risky" and not self._show_lineage:
+                compat = "ok"
             if col in STAT_COLS:
-                base_c = STAT_COLORS.get(cat.base_stats[STAT_NAMES[col - 4]], QColor(100, 100, 115))
-                if compat == 'incompatible':
-                    return QBrush(QColor(base_c.red() // 4, base_c.green() // 4, base_c.blue() // 4))
-                if compat == 'risky':
-                    return QBrush(QColor(base_c.red() // 2, base_c.green() // 2, base_c.blue() // 2))
+                base_c = STAT_COLORS.get(
+                    cat.base_stats[STAT_NAMES[col - 4]], QColor(100, 100, 115)
+                )
+                if compat == "incompatible":
+                    return QBrush(
+                        QColor(
+                            base_c.red() // 4, base_c.green() // 4, base_c.blue() // 4
+                        )
+                    )
+                if compat == "risky":
+                    return QBrush(
+                        QColor(
+                            base_c.red() // 2, base_c.green() // 2, base_c.blue() // 2
+                        )
+                    )
                 return QBrush(base_c)
             if col == COL_STAT:
                 sc = STATUS_COLOR.get(cat.status, QColor(80, 80, 90))
-                if compat == 'incompatible':
-                    return QBrush(QColor(sc.red() // 4, sc.green() // 4, sc.blue() // 4))
-                if compat == 'risky':
-                    return QBrush(QColor(sc.red() // 2, sc.green() // 2, sc.blue() // 2))
+                if compat == "incompatible":
+                    return QBrush(
+                        QColor(sc.red() // 4, sc.green() // 4, sc.blue() // 4)
+                    )
+                if compat == "risky":
+                    return QBrush(
+                        QColor(sc.red() // 2, sc.green() // 2, sc.blue() // 2)
+                    )
                 return QBrush(sc)
             if col == COL_INB:
                 if cat.parent_a is not None and cat.parent_b is not None:
@@ -1068,9 +1157,9 @@ class CatTableModel(QAbstractTableModel):
                         return QBrush(QColor(80, 20, 20))
                     if score >= 1:
                         return QBrush(QColor(70, 55, 10))
-            if compat == 'incompatible':
+            if compat == "incompatible":
                 return QBrush(QColor(18, 12, 14))
-            if compat == 'risky':
+            if compat == "risky":
                 return QBrush(QColor(22, 18, 10))
 
         elif role == Qt.ForegroundRole:
@@ -1080,11 +1169,11 @@ class CatTableModel(QAbstractTableModel):
                 else None
             )
             # Suppress risky highlight when lineage features are off
-            if compat == 'risky' and not self._show_lineage:
-                compat = 'ok'
-            if compat == 'incompatible':
+            if compat == "risky" and not self._show_lineage:
+                compat = "ok"
+            if compat == "incompatible":
                 return QBrush(QColor(65, 55, 60))
-            if compat == 'risky':
+            if compat == "risky":
                 return QBrush(QColor(130, 110, 60))
             if col in STAT_COLS or col == COL_STAT:
                 return QBrush(QColor(255, 255, 255))
@@ -1147,15 +1236,17 @@ class RoomFilterModel(QSortFilterProxyModel):
 
 # ── Detail / breeding panel widgets ──────────────────────────────────────────
 
-_CHIP_STYLE = ("QLabel { background:#252545; color:#ccc; border-radius:6px;"
-               " padding:2px 7px; font-size:11px; }")
-_SEC_STYLE  = "color:#555; font-size:10px; font-weight:bold; letter-spacing:1px;"
+_CHIP_STYLE = (
+    "QLabel { background:#252545; color:#ccc; border-radius:6px;"
+    " padding:2px 7px; font-size:11px; }"
+)
+_SEC_STYLE = "color:#555; font-size:10px; font-weight:bold; letter-spacing:1px;"
 _NAME_STYLE = "color:#eee; font-size:13px; font-weight:bold;"
 _META_STYLE = "color:#777; font-size:11px;"
 _WARN_STYLE = "color:#e07050; font-size:11px; font-weight:bold;"
 _SAFE_STYLE = "color:#50c080; font-size:11px;"
 _ANCS_STYLE = "color:#aaa; font-size:11px;"
-_PANEL_BG   = "background:#0a0a18; border-top:1px solid #1e1e38;"
+_PANEL_BG = "background:#0a0a18; border-top:1px solid #1e1e38;"
 
 
 def _chip(text: str, tooltip: str = "") -> QLabel:
@@ -1165,10 +1256,12 @@ def _chip(text: str, tooltip: str = "") -> QLabel:
         lbl.setToolTip(tooltip)
     return lbl
 
+
 def _sec(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet(_SEC_STYLE)
     return lbl
+
 
 def _vsep() -> QFrame:
     f = QFrame()
@@ -1223,7 +1316,7 @@ class CatDetailPanel(QWidget):
 
         min_h = 160 if len(cats) == 1 else 220
         self.setMinimumHeight(min_h)
-        self.setMaximumHeight(16777215)   # remove the fixed-height lock
+        self.setMaximumHeight(16777215)  # remove the fixed-height lock
 
         if len(cats) == 1:
             self._build_single(cats[0])
@@ -1241,10 +1334,13 @@ class CatDetailPanel(QWidget):
         id_col = QVBoxLayout()
         id_col.setSpacing(3)
         name_row = QHBoxLayout()
-        nl = QLabel(cat.name); nl.setStyleSheet(_NAME_STYLE)
+        nl = QLabel(cat.name)
+        nl.setStyleSheet(_NAME_STYLE)
         gl = QLabel(cat.gender_display)
         gl.setStyleSheet("color:#7ac; font-size:12px; font-weight:bold;")
-        name_row.addWidget(nl); name_row.addWidget(gl); name_row.addStretch()
+        name_row.addWidget(nl)
+        name_row.addWidget(gl)
+        name_row.addStretch()
         id_col.addLayout(name_row)
         id_col.addWidget(QLabel(cat.room_display or "—", styleSheet=_META_STYLE))
 
@@ -1252,17 +1348,18 @@ class CatDetailPanel(QWidget):
         has_mods = any(cat.total_stats[n] != cat.base_stats[n] for n in STAT_NAMES)
         if has_mods:
             id_col.addSpacing(4)
-            stat_row = QHBoxLayout(); stat_row.setSpacing(6)
+            stat_row = QHBoxLayout()
+            stat_row.setSpacing(6)
             for n in STAT_NAMES:
                 base = cat.base_stats[n]
                 total = cat.total_stats[n]
                 if total != base:
                     delta = total - base
-                    sign  = "+" if delta > 0 else ""
-                    text  = f"{n} {base}{sign}{delta}"
+                    sign = "+" if delta > 0 else ""
+                    text = f"{n} {base}{sign}{delta}"
                     col_s = "#5a9" if delta > 0 else "#c55"
                 else:
-                    text  = f"{n} {base}"
+                    text = f"{n} {base}"
                     col_s = "#555"
                 lbl = QLabel(text)
                 lbl.setStyleSheet(f"color:{col_s}; font-size:10px;")
@@ -1277,12 +1374,14 @@ class CatDetailPanel(QWidget):
             for row in range(mw._source_model.rowCount()):
                 if mw._source_model.cat_at(row) is target:
                     proxy_idx = mw._proxy_model.mapFromSource(
-                        mw._source_model.index(row, 0))
+                        mw._source_model.index(row, 0)
+                    )
                     if proxy_idx.isValid():
                         mw._table.selectionModel().setCurrentIndex(
                             proxy_idx,
-                            QItemSelectionModel.SelectionFlag.ClearAndSelect |
-                            QItemSelectionModel.SelectionFlag.Rows)
+                            QItemSelectionModel.SelectionFlag.ClearAndSelect
+                            | QItemSelectionModel.SelectionFlag.Rows,
+                        )
                         mw._table.scrollTo(proxy_idx)
                     break
 
@@ -1291,8 +1390,11 @@ class CatDetailPanel(QWidget):
             tree_btn.setStyleSheet(
                 "QPushButton { color:#5a8aaa; background:transparent; border:1px solid #252545;"
                 " padding:3px 8px; border-radius:4px; font-size:10px; }"
-                "QPushButton:hover { background:#131328; }")
-            tree_btn.clicked.connect(lambda: LineageDialog(cat, self, navigate_fn=_navigate).exec())
+                "QPushButton:hover { background:#131328; }"
+            )
+            tree_btn.clicked.connect(
+                lambda: LineageDialog(cat, self, navigate_fn=_navigate).exec()
+            )
             id_col.addWidget(tree_btn)
         id_col.addStretch()
         root.addLayout(id_col)
@@ -1300,7 +1402,8 @@ class CatDetailPanel(QWidget):
         # Abilities
         if cat.abilities:
             root.addWidget(_vsep())
-            ab = QVBoxLayout(); ab.setSpacing(4)
+            ab = QVBoxLayout()
+            ab.setSpacing(4)
             ab.addWidget(_sec("ABILITIES"))
             ab.addWidget(ChipRow(cat.abilities, tooltip_fn=_ability_tip))
             ab.addStretch()
@@ -1309,7 +1412,8 @@ class CatDetailPanel(QWidget):
         # Mutations
         if cat.mutations:
             root.addWidget(_vsep())
-            mu = QVBoxLayout(); mu.setSpacing(4)
+            mu = QVBoxLayout()
+            mu.setSpacing(4)
             mu.addWidget(_sec("MUTATIONS"))
             mu.addWidget(ChipRow(cat.mutations, tooltip_fn=_ability_tip))
             mu.addStretch()
@@ -1318,7 +1422,8 @@ class CatDetailPanel(QWidget):
         # Equipment
         if cat.equipment:
             root.addWidget(_vsep())
-            eq = QVBoxLayout(); eq.setSpacing(4)
+            eq = QVBoxLayout()
+            eq.setSpacing(4)
             eq.addWidget(_sec("EQUIPMENT"))
             eq.addWidget(ChipRow(cat.equipment))
             eq.addStretch()
@@ -1329,12 +1434,13 @@ class CatDetailPanel(QWidget):
         gparents = get_grandparents(cat)
         if parents:
             root.addWidget(_vsep())
-            anc = QVBoxLayout(); anc.setSpacing(4)
+            anc = QVBoxLayout()
+            anc.setSpacing(4)
             anc.addWidget(_sec("LINEAGE"))
 
-            p_names = " × ".join(
-                f"{p.name} ({p.gender_display})" for p in parents)
-            pl = QLabel(p_names); pl.setStyleSheet(_ANCS_STYLE)
+            p_names = " × ".join(f"{p.name} ({p.gender_display})" for p in parents)
+            pl = QLabel(p_names)
+            pl.setStyleSheet(_ANCS_STYLE)
             anc.addWidget(pl)
 
             if gparents:
@@ -1349,7 +1455,8 @@ class CatDetailPanel(QWidget):
         # Lovers & haters
         if cat.lovers or cat.haters:
             root.addWidget(_vsep())
-            rel = QVBoxLayout(); rel.setSpacing(4)
+            rel = QVBoxLayout()
+            rel.setSpacing(4)
             if cat.lovers:
                 rel.addWidget(_sec("LOVERS"))
                 rel.addWidget(ChipRow([c.name for c in cat.lovers]))
@@ -1359,7 +1466,11 @@ class CatDetailPanel(QWidget):
                 for i in range(hl.layout().count() - 1):  # tint hater chips red
                     w = hl.layout().itemAt(i).widget()
                     if w:
-                        w.setStyleSheet(w.styleSheet().replace("background:#252545", "background:#452020"))
+                        w.setStyleSheet(
+                            w.styleSheet().replace(
+                                "background:#252545", "background:#452020"
+                            )
+                        )
                 rel.addWidget(hl)
             rel.addStretch()
             root.addLayout(rel)
@@ -1411,17 +1522,19 @@ class CatDetailPanel(QWidget):
 
         # Grid rows: Cat A, Cat B, then Offspring last
         grid_rows = [
-            (a, True),    # (cat, is_cat)
+            (a, True),  # (cat, is_cat)
             (b, True),
             (None, False),  # offspring range
         ]
 
         grid_w = QWidget()
-        grid   = QGridLayout(grid_w)
+        grid = QGridLayout(grid_w)
         grid.setHorizontalSpacing(5)
         grid.setVerticalSpacing(5)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setColumnMinimumWidth(0, 110)   # ensure label column has room for full names
+        grid.setColumnMinimumWidth(
+            0, 110
+        )  # ensure label column has room for full names
 
         # Stat column headers
         for j, stat in enumerate(STAT_NAMES):
@@ -1439,7 +1552,7 @@ class CatDetailPanel(QWidget):
             row_num = i + 1
 
             # Label cell: name + gender chip for cat rows, plain text for offspring
-            lbl_w  = QWidget()
+            lbl_w = QWidget()
             lbl_hb = QHBoxLayout(lbl_w)
             lbl_hb.setContentsMargins(0, 0, 6, 0)
             lbl_hb.setSpacing(5)
@@ -1447,12 +1560,13 @@ class CatDetailPanel(QWidget):
             if is_cat:
                 name_lbl = QLabel(cat.name)
                 name_lbl.setStyleSheet("color:#ddd; font-size:11px; font-weight:bold;")
-                gen_lbl  = QLabel(cat.gender_display)
+                gen_lbl = QLabel(cat.gender_display)
                 gen_lbl.setFixedWidth(20)
                 gen_lbl.setAlignment(Qt.AlignCenter)
                 gen_lbl.setStyleSheet(
                     "color:#fff; background:#253555; border-radius:4px;"
-                    " font-size:10px; font-weight:bold;")
+                    " font-size:10px; font-weight:bold;"
+                )
                 lbl_hb.addWidget(name_lbl)
                 lbl_hb.addWidget(gen_lbl)
             else:
@@ -1466,24 +1580,26 @@ class CatDetailPanel(QWidget):
             # Stat cells
             for j, stat in enumerate(STAT_NAMES):
                 if is_cat:
-                    val  = cat.base_stats[stat]
-                    c    = STAT_COLORS.get(val, QColor(100, 100, 115))
+                    val = cat.base_stats[stat]
+                    c = STAT_COLORS.get(val, QColor(100, 100, 115))
                     cell = QLabel(str(val))
                     cell.setAlignment(Qt.AlignCenter)
                     cell.setStyleSheet(
                         f"background:rgb({c.red()},{c.green()},{c.blue()});"
                         f"color:#fff; font-size:11px; font-weight:bold;"
-                        f"border-radius:2px; padding:2px 6px;")
+                        f"border-radius:2px; padding:2px 6px;"
+                    )
                 else:
                     va, vb = a.base_stats[stat], b.base_stats[stat]
                     lo, hi = min(va, vb), max(va, vb)
-                    c      = STAT_COLORS.get(hi, QColor(100, 100, 115))
-                    text   = f"{lo}–{hi}" if lo != hi else str(lo)
-                    cell   = QLabel(text)
+                    c = STAT_COLORS.get(hi, QColor(100, 100, 115))
+                    text = f"{lo}–{hi}" if lo != hi else str(lo)
+                    cell = QLabel(text)
                     cell.setAlignment(Qt.AlignCenter)
                     cell.setStyleSheet(
                         f"color:rgb({c.red()},{c.green()},{c.blue()});"
-                        f"font-size:11px; font-weight:bold;")
+                        f"font-size:11px; font-weight:bold;"
+                    )
                 grid.addWidget(cell, row_num, j + 1)
 
             # Sum cell
@@ -1510,7 +1626,9 @@ class CatDetailPanel(QWidget):
             if cat.abilities:
                 row = QHBoxLayout()
                 row.setSpacing(5)
-                row.addWidget(QLabel(f"{cat.name}:", styleSheet="color:#555; font-size:10px;"))
+                row.addWidget(
+                    QLabel(f"{cat.name}:", styleSheet="color:#555; font-size:10px;")
+                )
                 for ab in cat.abilities:
                     row.addWidget(_chip(ab, _ability_tip(ab)))
                 row.addStretch()
@@ -1532,7 +1650,9 @@ class CatDetailPanel(QWidget):
                 if cat.mutations:
                     mrow = QHBoxLayout()
                     mrow.setSpacing(5)
-                    mrow.addWidget(QLabel(f"{cat.name}:", styleSheet="color:#555; font-size:10px;"))
+                    mrow.addWidget(
+                        QLabel(f"{cat.name}:", styleSheet="color:#555; font-size:10px;")
+                    )
                     for mut in cat.mutations:
                         mrow.addWidget(_chip(mut, _ability_tip(mut)))
                     mrow.addStretch()
@@ -1545,19 +1665,26 @@ class CatDetailPanel(QWidget):
             lc = QVBoxLayout()
             lc.setSpacing(3)
             lc.addWidget(_sec("LINEAGE"))
-            common    = find_common_ancestors(a, b)
-            is_direct = (a in get_parents(b) or b in get_parents(a))
-            is_haters = (b in getattr(a, 'haters', []) or a in getattr(b, 'haters', []))
+            common = find_common_ancestors(a, b)
+            is_direct = a in get_parents(b) or b in get_parents(a)
+            is_haters = b in getattr(a, "haters", []) or a in getattr(b, "haters", [])
 
             if is_haters:
-                lc.addWidget(QLabel("⚠  These cats hate each other", styleSheet=_WARN_STYLE))
+                lc.addWidget(
+                    QLabel("⚠  These cats hate each other", styleSheet=_WARN_STYLE)
+                )
             if is_direct:
-                lc.addWidget(QLabel("⚠  Direct parent/offspring", styleSheet=_WARN_STYLE))
+                lc.addWidget(
+                    QLabel("⚠  Direct parent/offspring", styleSheet=_WARN_STYLE)
+                )
             elif common:
-                lc.addWidget(QLabel(
-                    f"⚠  {len(common)} shared ancestor{'s' if len(common) > 1 else ''}: "
-                    + "  ·  ".join(c.short_name for c in common[:6]),
-                    styleSheet=_WARN_STYLE))
+                lc.addWidget(
+                    QLabel(
+                        f"⚠  {len(common)} shared ancestor{'s' if len(common) > 1 else ''}: "
+                        + "  ·  ".join(c.short_name for c in common[:6]),
+                        styleSheet=_WARN_STYLE,
+                    )
+                )
             elif get_parents(a) or get_parents(b):
                 lc.addWidget(QLabel("✓  No shared ancestors", styleSheet=_SAFE_STYLE))
             else:
@@ -1572,13 +1699,14 @@ class CatDetailPanel(QWidget):
 
 # ── Lineage tree dialog ───────────────────────────────────────────────────────
 
+
 class LineageDialog(QDialog):
     """
     Family tree dialog — generations from oldest (top) to newest (bottom).
     Layout:  Grandparents → Parents → Self → Children → Grandchildren
     """
 
-    def __init__(self, cat: 'Cat', parent=None, navigate_fn=None):
+    def __init__(self, cat: "Cat", parent=None, navigate_fn=None):
         super().__init__(parent)
         self.setWindowTitle(f"Family Tree — {cat.name}")
         self.setMinimumSize(700, 400)
@@ -1601,26 +1729,29 @@ class LineageDialog(QDialog):
                 btn.setEnabled(False)
                 btn.setStyleSheet(
                     "QPushButton { color:#252535; font-size:10px; padding:6px 10px;"
-                    " background:#0d0d1c; border:1px solid #141424; border-radius:5px; }")
+                    " background:#0d0d1c; border:1px solid #141424; border-radius:5px; }"
+                )
             else:
                 line2 = cat_obj.gender_display
                 if cat_obj.room_display:
                     line2 += f"  {cat_obj.room_display}"
-                bg     = "#1a2840" if highlight else ("#0e0e1a" if dim else "#121222")
+                bg = "#1a2840" if highlight else ("#0e0e1a" if dim else "#121222")
                 border = "#3060a0" if highlight else ("#1a1a28" if dim else "#222238")
-                col    = "#ddd"    if not dim    else "#333"
+                col = "#ddd" if not dim else "#333"
                 can_nav = navigate_fn is not None and cat_obj is not cat
-                hover  = "#1d3560" if can_nav else bg
+                hover = "#1d3560" if can_nav else bg
                 btn = QPushButton(f"{cat_obj.name}\n{line2}")
                 btn.setStyleSheet(
                     f"QPushButton {{ color:{col}; font-size:10px; padding:6px 10px;"
                     f" background:{bg}; border:1px solid {border}; border-radius:5px;"
                     f" text-align:center; }}"
-                    f"QPushButton:hover {{ background:{hover}; }}")
+                    f"QPushButton:hover {{ background:{hover}; }}"
+                )
                 if can_nav:
                     btn.setCursor(Qt.CursorShape.PointingHandCursor)
                     btn.clicked.connect(
-                        lambda checked=False, c=cat_obj: (self.accept(), navigate_fn(c)))
+                        lambda checked=False, c=cat_obj: (self.accept(), navigate_fn(c))
+                    )
             btn.setMinimumWidth(100)
             btn.setMaximumWidth(200)
             return btn
@@ -1630,7 +1761,8 @@ class LineageDialog(QDialog):
             lbl = QLabel(text)
             lbl.setStyleSheet(
                 "color:#333; font-size:9px; font-weight:bold; letter-spacing:1px;"
-                " min-width:90px;")
+                " min-width:90px;"
+            )
             lbl.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
             return lbl
 
@@ -1639,8 +1771,9 @@ class LineageDialog(QDialog):
             row.setSpacing(8)
             row.addWidget(gen_row_label(label_text))
             for c in cat_list:
-                row.addWidget(cat_box(c, highlight=highlight_all,
-                                      dim=(dim_all and c is not None)))
+                row.addWidget(
+                    cat_box(c, highlight=highlight_all, dim=(dim_all and c is not None))
+                )
             row.addStretch()
             outer.addLayout(row)
 
@@ -1652,7 +1785,7 @@ class LineageDialog(QDialog):
         gp_b2 = pb.parent_b if pb else None
 
         grandparents = [gp_a1, gp_a2, gp_b1, gp_b2]
-        parents      = [pa, pb]
+        parents = [pa, pb]
 
         children = list(cat.children)
         grandchildren: list = []
@@ -1660,21 +1793,27 @@ class LineageDialog(QDialog):
             grandchildren.extend(child.children)
 
         make_gen_row("GRANDPARENTS", grandparents)
-        make_gen_row("PARENTS",      parents)
-        make_gen_row("",             [cat], highlight_all=True)
+        make_gen_row("PARENTS", parents)
+        make_gen_row("", [cat], highlight_all=True)
         if children:
             make_gen_row("CHILDREN", children[:8])
             if len(children) > 8:
                 outer.addWidget(
-                    QLabel(f"  … and {len(children)-8} more children",
-                           styleSheet="color:#444; font-size:10px; padding-left:100px;"))
+                    QLabel(
+                        f"  … and {len(children) - 8} more children",
+                        styleSheet="color:#444; font-size:10px; padding-left:100px;",
+                    )
+                )
         if grandchildren:
             unique_gc = list({id(g): g for g in grandchildren}.values())
             make_gen_row("GRANDCHILDREN", unique_gc[:8])
             if len(unique_gc) > 8:
                 outer.addWidget(
-                    QLabel(f"  … and {len(unique_gc)-8} more grandchildren",
-                           styleSheet="color:#444; font-size:10px; padding-left:100px;"))
+                    QLabel(
+                        f"  … and {len(unique_gc) - 8} more grandchildren",
+                        styleSheet="color:#444; font-size:10px; padding-left:100px;",
+                    )
+                )
 
         outer.addStretch()
         close_btn = QPushButton("Close")
@@ -1693,6 +1832,7 @@ QPushButton:hover   { background:#252545; }
 QPushButton:checked { background:#353568; color:#fff; font-weight:bold; }
 """
 
+
 def _sidebar_btn(label: str) -> QPushButton:
     btn = QPushButton(label)
     btn.setCheckable(True)
@@ -1701,6 +1841,7 @@ def _sidebar_btn(label: str) -> QPushButton:
 
 
 # ── Main window ───────────────────────────────────────────────────────────────
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -1772,7 +1913,7 @@ class MainWindow(QMainWindow):
     # ── Sidebar ────────────────────────────────────────────────────────────
 
     def _build_sidebar(self) -> QWidget:
-        w  = QWidget()
+        w = QWidget()
         w.setFixedWidth(190)
         w.setStyleSheet("background:#14142a;")
         vb = QVBoxLayout(w)
@@ -1781,14 +1922,17 @@ class MainWindow(QMainWindow):
 
         def sl(text):
             l = QLabel(text)
-            l.setStyleSheet("color:#444; font-size:10px; font-weight:bold;"
-                            " letter-spacing:1px; padding:8px 4px 4px 4px;")
+            l.setStyleSheet(
+                "color:#444; font-size:10px; font-weight:bold;"
+                " letter-spacing:1px; padding:8px 4px 4px 4px;"
+            )
             return l
 
         vb.addWidget(sl("VIEW"))
         self._btn_everyone = _sidebar_btn("All Cats")
         self._btn_everyone.clicked.connect(
-            lambda: self._filter("__all__", self._btn_everyone))
+            lambda: self._filter("__all__", self._btn_everyone)
+        )
         vb.addWidget(self._btn_everyone)
         self._room_btns["__all__"] = self._btn_everyone
 
@@ -1801,21 +1945,22 @@ class MainWindow(QMainWindow):
 
         vb.addWidget(_hsep())
         vb.addWidget(sl("ROOMS"))
-        self._rooms_vb = QVBoxLayout(); self._rooms_vb.setSpacing(2)
+        self._rooms_vb = QVBoxLayout()
+        self._rooms_vb.setSpacing(2)
         vb.addLayout(self._rooms_vb)
         vb.addWidget(_hsep())
 
         vb.addWidget(sl("OTHER"))
         self._btn_adventure = _sidebar_btn("On Adventure")
-        self._btn_gone      = _sidebar_btn("Gone")
+        self._btn_gone = _sidebar_btn("Gone")
         self._btn_adventure.clicked.connect(
-            lambda: self._filter("__adventure__", self._btn_adventure))
-        self._btn_gone.clicked.connect(
-            lambda: self._filter("__gone__", self._btn_gone))
+            lambda: self._filter("__adventure__", self._btn_adventure)
+        )
+        self._btn_gone.clicked.connect(lambda: self._filter("__gone__", self._btn_gone))
         vb.addWidget(self._btn_adventure)
         vb.addWidget(self._btn_gone)
         self._room_btns["__adventure__"] = self._btn_adventure
-        self._room_btns["__gone__"]      = self._btn_gone
+        self._room_btns["__gone__"] = self._btn_gone
 
         vb.addStretch()
 
@@ -1825,10 +1970,12 @@ class MainWindow(QMainWindow):
         vb.addWidget(self._save_lbl)
 
         rb = QPushButton("⟳  Reload  (F5)")
-        rb.setStyleSheet("QPushButton { color:#888; background:#1a1a32;"
-                         " border:1px solid #2a2a4a; padding:7px;"
-                         " border-radius:4px; font-size:11px; }"
-                         "QPushButton:hover { background:#222244; }")
+        rb.setStyleSheet(
+            "QPushButton { color:#888; background:#1a1a32;"
+            " border:1px solid #2a2a4a; padding:7px;"
+            " border-radius:4px; font-size:11px; }"
+            "QPushButton:hover { background:#222244; }"
+        )
         rb.clicked.connect(self._reload)
         vb.addWidget(rb)
         return w
@@ -1839,10 +1986,14 @@ class MainWindow(QMainWindow):
             if item.widget():
                 item.widget().deleteLater()
         _ROOM_ORDER = {
-            "Attic": 0, "Attic_Large": 0,
-            "Floor2_Large": 1, "Floor2_Small": 2,
-            "Floor1_Large": 3, "Floor1_Small": 4,
-            "Basement": 5, "Basement_Large": 5,
+            "Attic": 0,
+            "Attic_Large": 0,
+            "Floor2_Large": 1,
+            "Floor2_Small": 2,
+            "Floor1_Large": 3,
+            "Floor1_Small": 4,
+            "Basement": 5,
+            "Basement_Large": 5,
         }
         rooms = sorted(
             {c.room for c in cats if c.status == "In House" and c.room},
@@ -1859,7 +2010,7 @@ class MainWindow(QMainWindow):
     # ── Content ────────────────────────────────────────────────────────────
 
     def _build_content(self) -> QWidget:
-        w  = QWidget()
+        w = QWidget()
         vb = QVBoxLayout(w)
         vb.setContentsMargins(0, 0, 0, 0)
         vb.setSpacing(0)
@@ -1868,7 +2019,8 @@ class MainWindow(QMainWindow):
         hdr = QWidget()
         hdr.setStyleSheet("background:#16213e; border-bottom:1px solid #1e1e38;")
         hdr.setFixedHeight(46)
-        hb = QHBoxLayout(hdr); hb.setContentsMargins(14, 0, 14, 0)
+        hb = QHBoxLayout(hdr)
+        hb.setContentsMargins(14, 0, 14, 0)
         self._header_lbl = QLabel("All Cats")
         self._header_lbl.setStyleSheet("color:#eee; font-size:15px; font-weight:bold;")
         self._count_lbl = QLabel("")
@@ -1882,7 +2034,8 @@ class MainWindow(QMainWindow):
         self._search.setStyleSheet(
             "QLineEdit { background:#0d0d1c; color:#ccc; border:1px solid #2a2a4a;"
             " border-radius:4px; padding:3px 8px; font-size:12px; }"
-            "QLineEdit:focus { border-color:#3a3a7a; }")
+            "QLineEdit:focus { border-color:#3a3a7a; }"
+        )
         hb.addWidget(self._header_lbl)
         hb.addWidget(self._count_lbl)
         hb.addStretch()
@@ -1900,7 +2053,7 @@ class MainWindow(QMainWindow):
 
         # Table
         self._source_model = CatTableModel()
-        self._proxy_model  = RoomFilterModel()
+        self._proxy_model = RoomFilterModel()
         self._proxy_model.setSourceModel(self._source_model)
         self._proxy_model.modelReset.connect(self._update_count)
         self._proxy_model.rowsInserted.connect(self._update_count)
@@ -1928,8 +2081,9 @@ class MainWindow(QMainWindow):
         hh.setSectionResizeMode(COL_ROOM, QHeaderView.ResizeToContents)
 
         # Narrow fixed columns (gender, status, stats, sum)
-        for col, width in [(COL_GEN, _W_GEN), (COL_STAT, _W_STATUS),
-                           (COL_SUM, 38)] + [(c, _W_STAT) for c in STAT_COLS]:
+        for col, width in [(COL_GEN, _W_GEN), (COL_STAT, _W_STATUS), (COL_SUM, 38)] + [
+            (c, _W_STAT) for c in STAT_COLS
+        ]:
             hh.setSectionResizeMode(col, QHeaderView.Fixed)
             self._table.setColumnWidth(col, width)
 
@@ -1991,15 +2145,17 @@ class MainWindow(QMainWindow):
     # ── Selection → detail ────────────────────────────────────────────────
 
     def _on_selection(self):
-        rows = list({
-            self._proxy_model.mapToSource(idx).row()
-            for idx in self._table.selectionModel().selectedRows()
-        })
+        rows = list(
+            {
+                self._proxy_model.mapToSource(idx).row()
+                for idx in self._table.selectionModel().selectedRows()
+            }
+        )
         cats = [c for r in rows[:2] if (c := self._source_model.cat_at(r)) is not None]
         was_collapsed = self._detail.maximumHeight() == 0
         self._detail.show_cats(cats)
         if cats and was_collapsed:
-            total   = self._detail_splitter.height()
+            total = self._detail_splitter.height()
             panel_h = 200 if len(cats) == 1 else 300
             self._detail_splitter.setSizes([max(10, total - panel_h), panel_h])
 
@@ -2034,14 +2190,13 @@ class MainWindow(QMainWindow):
 
     def _update_count(self):
         visible = self._proxy_model.rowCount()
-        total   = self._source_model.rowCount()
+        total = self._source_model.rowCount()
         self._count_lbl.setText(f"  {visible} / {total} cats")
 
         placed = sum(1 for c in self._cats if c.status == "In House")
-        adv    = sum(1 for c in self._cats if c.status == "Adventure")
-        gone   = sum(1 for c in self._cats if c.status == "Gone")
-        self._summary_lbl.setText(
-            f"House: {placed}  |  Away: {adv}  |  Gone: {gone}")
+        adv = sum(1 for c in self._cats if c.status == "Adventure")
+        gone = sum(1 for c in self._cats if c.status == "Gone")
+        self._summary_lbl.setText(f"House: {placed}  |  Away: {adv}  |  Gone: {gone}")
 
     # ── Loading ────────────────────────────────────────────────────────────
 
@@ -2059,8 +2214,8 @@ class MainWindow(QMainWindow):
             # Update fixed sidebar button counts
             total = len(cats)
             alive = sum(1 for c in cats if c.status != "Gone")
-            adv   = sum(1 for c in cats if c.status == "Adventure")
-            gone  = sum(1 for c in cats if c.status == "Gone")
+            adv = sum(1 for c in cats if c.status == "Adventure")
+            gone = sum(1 for c in cats if c.status == "Gone")
             self._btn_everyone.setText(f"All Cats  ({total})")
             self._btn_all.setText(f"Alive  ({alive})")
             self._btn_adventure.setText(f"On Adventure  ({adv})")
@@ -2084,14 +2239,14 @@ class MainWindow(QMainWindow):
             self._table.setColumnHidden(col, not checked)
         self._source_model.set_show_lineage(checked)
         self._detail.set_show_lineage(checked)
-        self._on_selection()   # refresh detail panel with updated flag
+        self._on_selection()  # refresh detail panel with updated flag
 
     def _open_file(self):
-        saves   = find_save_files()
-        start   = os.path.dirname(saves[0]) if saves else os.path.expanduser("~")
+        saves = find_save_files()
+        start = os.path.dirname(saves[0]) if saves else os.path.expanduser("~")
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open Mewgenics Save File", start,
-            "Save Files (*.sav);;All Files (*)")
+            self, "Open Mewgenics Save File", start, "Save Files (*.sav);;All Files (*)"
+        )
         if path:
             self.load_save(path)
 
@@ -2106,30 +2261,33 @@ class MainWindow(QMainWindow):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _hsep() -> QFrame:
-    f = QFrame(); f.setFrameShape(QFrame.HLine)
+    f = QFrame()
+    f.setFrameShape(QFrame.HLine)
     f.setStyleSheet("color:#1e1e38; margin:6px 0;")
     return f
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
     pal = QPalette()
-    pal.setColor(QPalette.Window,          QColor(13,  13,  28))
-    pal.setColor(QPalette.WindowText,      QColor(220, 220, 230))
-    pal.setColor(QPalette.Base,            QColor(18,  18,  36))
-    pal.setColor(QPalette.AlternateBase,   QColor(20,  20,  40))
-    pal.setColor(QPalette.Text,            QColor(220, 220, 230))
-    pal.setColor(QPalette.Button,          QColor(22,  22,  46))
-    pal.setColor(QPalette.ButtonText,      QColor(200, 200, 210))
-    pal.setColor(QPalette.Highlight,       QColor(30,  48, 100))
+    pal.setColor(QPalette.Window, QColor(13, 13, 28))
+    pal.setColor(QPalette.WindowText, QColor(220, 220, 230))
+    pal.setColor(QPalette.Base, QColor(18, 18, 36))
+    pal.setColor(QPalette.AlternateBase, QColor(20, 20, 40))
+    pal.setColor(QPalette.Text, QColor(220, 220, 230))
+    pal.setColor(QPalette.Button, QColor(22, 22, 46))
+    pal.setColor(QPalette.ButtonText, QColor(200, 200, 210))
+    pal.setColor(QPalette.Highlight, QColor(30, 48, 100))
     pal.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
-    pal.setColor(QPalette.ToolTipBase,     QColor(20,  20,  40))
-    pal.setColor(QPalette.ToolTipText,     QColor(220, 220, 230))
+    pal.setColor(QPalette.ToolTipBase, QColor(20, 20, 40))
+    pal.setColor(QPalette.ToolTipText, QColor(220, 220, 230))
     app.setPalette(pal)
 
     win = MainWindow()
