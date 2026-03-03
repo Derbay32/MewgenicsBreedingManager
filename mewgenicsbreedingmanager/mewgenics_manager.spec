@@ -4,7 +4,10 @@ a = Analysis(
     ['mewgenics_manager.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('locales/en.json', 'locales'),
+        ('locales/zh.json', 'locales'),
+    ],
     hiddenimports=[
         'lz4.frame',
         'lz4.block',

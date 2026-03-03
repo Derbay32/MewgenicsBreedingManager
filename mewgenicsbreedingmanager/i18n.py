@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -7,7 +8,24 @@ SUPPORTED_LANGUAGES = ("en", "zh")
 
 _current_language = DEFAULT_LANGUAGE
 _locale_cache: dict[str, dict[str, str]] = {}
-_locales_dir = Path(__file__).resolve().parent / "locales"
+
+
+def _resolve_locales_dir() -> Path:
+    module_dir = Path(__file__).resolve().parent
+    candidates = [module_dir / "locales"]
+
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", module_dir))
+        candidates.append(base / "locales")
+        candidates.append(base / "mewgenicsbreedingmanager" / "locales")
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return candidates[0]
+
+
+_locales_dir = _resolve_locales_dir()
 
 
 def _load_locale(language: str) -> dict[str, str]:
@@ -58,4 +76,3 @@ def t(key: str, **kwargs: Any) -> str:
         return template.format(**kwargs)
     except Exception:
         return template
-
